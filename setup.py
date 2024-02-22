@@ -19,7 +19,7 @@ setup(
         'gffutils',
         'pybedtools',
         'pandas',
-    ]
+    ],
     package_dir={
         'annotator': 'annotator',
     },
