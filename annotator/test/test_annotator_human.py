@@ -1,25 +1,30 @@
 #!/usr/bin/env python
 
+from pathlib import Path
+
 from annotator import annotate_bed as a
 from annotator import annotation_functions as af
 from annotator import annotator
+from annotator.intervals import Interval
+from annotator.test.db_fixtures import ensure_db
 import gffutils
-import pybedtools
+
+TEST_DATA = Path(__file__).parent / "data"
 
 CHR19_CHROMS = ['chr19']
 CHR21_CHROMS = ['chr21']
-CHR19_DB_FILE = 'test/data/gencode.v19.annotation.chr19.10000000.gtf.db'
-CHR21_DB_FILE = 'test/data/gencode.v19.annotation.chr21.46M-47M.gtf.db'
-SPECIES = 'hg19'
+CHR19_DB_FILE = ensure_db('gencode.v19.annotation.chr19.10000000.gtf')
+CHR21_DB_FILE = ensure_db('gencode.v19.annotation.chr21.46M-47M.gtf')
+GTF_FORMAT = 'gencode'
 
 chr19_exons_dict, \
 chr19_transcripts_dict, chr19_cds_dict, chr19_features_dict, chr19_keys = a.create_definitions(
-    CHR19_DB_FILE, CHR19_CHROMS, SPECIES
+    CHR19_DB_FILE, CHR19_CHROMS, GTF_FORMAT
 )
 
 chr21_exons_dict, \
 chr21_transcripts_dict, chr21_cds_dict, chr21_features_dict, chr21_keys = a.create_definitions(
-    CHR21_DB_FILE, CHR21_CHROMS, SPECIES
+    CHR21_DB_FILE, CHR21_CHROMS, GTF_FORMAT
 )
 
 
@@ -45,20 +50,20 @@ def transcript_priority_1():
 
 def get_3utr_features_1():
     utr3_features = []
-    with open('test/data/gencode.v19.annotation.ENST00000159111.4.3UTR.gtf', 'r') as f:
+    with open(TEST_DATA / 'gencode.v19.annotation.ENST00000159111.4.3UTR.gtf', 'r') as f:
         for line in f:
             utr3_features.append(gffutils.feature.feature_from_line(line))
     return utr3_features
 
 def get_5utr_features_1():
     utr5_features = []
-    with open('test/data/gencode.v19.annotation.ENST00000159111.4.5UTR.gtf', 'r') as f:
+    with open(TEST_DATA / 'gencode.v19.annotation.ENST00000159111.4.5UTR.gtf', 'r') as f:
         for line in f:
             utr5_features.append(gffutils.feature.feature_from_line(line))
     return utr5_features
 
 def get_proxdist_db():
-    return 'test/data/proxdist_test.gtf.db'
+    return ensure_db('proxdist_test.gtf')
 
 def test_get_all_cds_dict_1():
     print(
@@ -180,7 +185,7 @@ def test_annotate_prioritize_noncoding_exon_1():
         ['non_coding', 'exon'], ['protein_coding', 'CDS']
     ]
 
-    stranded = True,
+    stranded = True
 
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
@@ -210,7 +215,7 @@ def test_annotate_prioritize_noncoding_exon_2():
     qname = 'KDM4B'
     qscore = 0
     qstrand = '+'
-    stranded = True,
+    stranded = True
 
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
@@ -239,7 +244,7 @@ def test_annotate_cds_2():
     region_priority = [
         ['protein_coding', 'CDS'], ['non_coding', 'exon'],
     ]
-    stranded = True,
+    stranded = True
 
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
@@ -273,7 +278,7 @@ def test_annotate_distintron_1():
     ]
 
 
-    stranded = True,
+    stranded = True
 
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
@@ -299,7 +304,7 @@ def test_intergenic_1():
         ['protein_coding', 'CDS'],
     ]
 
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -315,13 +320,12 @@ def test_utr_classification_1():
           "as test_utr_classification_2, but re-orders the priority "
           "such that 5utr is higher than 5utr. Supposed to return 5utr")
     chroms = ['chr11']
-    db = 'test/data/gencode.v19.annotation.chr11.70M-71M.gtf.db'
-    species = 'hg19'
+    db = ensure_db('gencode.v19.annotation.chr11.70M-71M.gtf')
 
     exons_dict, \
     transcripts_dict, cds_dict, features_dict, \
     keys = a.create_definitions(
-        db, chroms, species
+        db, chroms, GTF_FORMAT
     )
     qchrom = 'chr11'
     qstart = 70266235
@@ -335,7 +339,7 @@ def test_utr_classification_1():
         ['protein_coding', 'CDS'],
     ]
 
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -349,13 +353,12 @@ def test_utr_classification_2():
           "as test_utr_classification_1, but re-orders the priority "
           "such that 3utr is higher than 5utr. Supposed to return 3utr")
     chroms = ['chr11']
-    db = 'test/data/gencode.v19.annotation.chr11.70M-71M.gtf.db'
-    species = 'hg19'
+    db = ensure_db('gencode.v19.annotation.chr11.70M-71M.gtf')
 
     exons_dict, \
     transcripts_dict, cds_dict, features_dict, \
     keys = a.create_definitions(
-        db, chroms, species
+        db, chroms, GTF_FORMAT
     )
     qchrom = 'chr11'
     qstart = 70266235
@@ -369,7 +372,7 @@ def test_utr_classification_2():
         ['protein_coding', 'CDS'],
     ]
 
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -384,16 +387,16 @@ def test_split_prox_dist_1():
           "specified distance.")
     length = 10
     midpoint = 5
-    intron_interval = pybedtools.create_interval_from_list(
+    intron_interval = Interval.from_list(
         ['chr1', '0', str(length), 'intron', '0', '+']
     )
     proxdist_dict = af.get_proxdist_from_intron(
         interval=intron_interval, distance=midpoint
     )
-    assert 'prox' in proxdist_dict.keys()  # found a prox intron region.
-    assert len(proxdist_dict['dist']) == 0  # found no dist intron
-    assert len(proxdist_dict['prox']) == 1  # just found one prox intron
-    assert proxdist_dict['prox'][0] == pybedtools.create_interval_from_list(
+    assert 'prox' in proxdist_dict.keys()
+    assert len(proxdist_dict['dist']) == 0
+    assert len(proxdist_dict['prox']) == 1
+    assert proxdist_dict['prox'][0] == Interval.from_list(
         ['chr1', '0', str(length), 'proxintron5', '0', '+']
     )
 
@@ -403,23 +406,23 @@ def test_split_prox_dist_2():
           "specified distance.")
     length = 11
     midpoint = 5
-    intron_interval = pybedtools.create_interval_from_list(
+    intron_interval = Interval.from_list(
         ['chr1', '0', str(length), 'intron', '0', '+']
     )
     proxdist_dict = af.get_proxdist_from_intron(
         interval=intron_interval, distance=midpoint
     )
-    assert 'prox' in proxdist_dict.keys()  # found a prox intron region.
-    assert 'dist' in proxdist_dict.keys()  # found a prox intron region.
-    assert len(proxdist_dict['dist']) == 1  # found one dist intron
-    assert len(proxdist_dict['prox']) == 2  # found two prox introns
-    assert proxdist_dict['prox'][0] == pybedtools.create_interval_from_list(
+    assert 'prox' in proxdist_dict.keys()
+    assert 'dist' in proxdist_dict.keys()
+    assert len(proxdist_dict['dist']) == 1
+    assert len(proxdist_dict['prox']) == 2
+    assert proxdist_dict['prox'][0] == Interval.from_list(
         ['chr1', '0', '5', 'proxintron5', '0', '+']
     )
-    assert proxdist_dict['prox'][1] == pybedtools.create_interval_from_list(
+    assert proxdist_dict['prox'][1] == Interval.from_list(
         ['chr1', '6', '11', 'proxintron5', '0', '+']
     )
-    assert proxdist_dict['dist'][0] == pybedtools.create_interval_from_list(
+    assert proxdist_dict['dist'][0] == Interval.from_list(
         ['chr1', '5', '6', 'distintron5', '0', '+']
     )
 
@@ -431,13 +434,12 @@ def test_proxdist_regions_1():
           "intron respectively.")
     db_file = get_proxdist_db()
     chroms = ['chr1']
-    species = 'hg19'
     append_chr = False
     fuzzy = False
     num_proxintrons = 0
     exons_dict, transcripts_dict, \
     cds_dict, features_dict, keys = a.create_definitions(
-        db_file, chroms=chroms, species=species, append_chr=append_chr,
+        db_file, chroms=chroms, gtf_format=GTF_FORMAT, append_chr=append_chr,
         fuzzy=fuzzy
     )
     for hashkey in features_dict.keys():

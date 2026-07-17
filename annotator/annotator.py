@@ -1,25 +1,15 @@
 #!/usr/bin/env python
+"""Command-line entry point for annotating BED files.
 
-# transitionning to python2/python3 support
-
-# these two are really a minimum
-
-# from __future__ import print_function
-# from __future__ import division
-
-# uncomment from this compatibility import list, as py3/py2 support progresses
-
-# from __future__  import absolute_import
-# from __future__  import unicode_literals
-# from future import standard_library
-# # from future.builtins import builtins
-# from future.builtins import utils
-# from future.utils import raise_with_traceback
-# from future.utils import iteritems
+Parses CLI arguments and delegates to annotate_bed.annotate_bed, using
+built-in or user-supplied transcript and gene annotation priority lists.
+"""
 
 from argparse import ArgumentParser
-from . import annotate_bed
 import sys
+
+from . import annotate_bed
+
 
 TRANSCRIPT_PRIORITY = [
     ['miRNA', 'exon'],
@@ -65,23 +55,41 @@ GENE_PRIORITY = [
 
 
 def parse_annotation_priority(priority_file, delim=','):
-    """
-    From a comma delimited file, return a list of lists
-    describing the priority with which to annotate stuff.
+    """Load an annotation priority list from a delimited text file.
 
-    :param priority_file:
-    :return:
+    Each non-empty line must contain at least two fields: a transcript or
+    gene type and a feature type, in that order.
+
+    Args:
+        priority_file (str): Path to the priority file.
+        delim (str): Field delimiter. Defaults to comma.
+
+    Returns:
+        list: List of [type, featuretype] pairs, one per line.
     """
     priority = []
-    with open(priority_file, 'r') as f:
-        for line in f:
-            line = line.rstrip().split(delim)
-            priority.append([line[0], line[1]])
+    with open(priority_file, 'r') as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            fields = stripped.split(delim)
+            if len(fields) < 2:
+                raise ValueError(
+                    "Priority file {} requires at least two fields per line: {!r}".format(
+                        priority_file, line.rstrip()
+                    )
+                )
+            priority.append([fields[0], fields[1]])
     return priority
 
 
 def main():
-    # Setup argument parser
+    """Run the annotator CLI.
+
+    Parses command-line arguments, resolves default or file-based priority
+    lists, and invokes annotate_bed for each input BED file.
+    """
     parser = ArgumentParser()
 
     parser.add_argument(
@@ -155,45 +163,57 @@ def main():
         nargs='+',
         default=[]
     )
-    try:
-        args = parser.parse_args()
-    except:
-        parser.print_help()
-        sys.exit(0)
+    parser.add_argument(
+        "-c", "--cores",
+        dest="cores",
+        type=int,
+        default=1,
+        help="number of CPU cores to use for annotation (default: 1)",
+    )
+    parser.add_argument(
+        "--no-index",
+        dest="use_index",
+        action='store_false',
+        help="Do not load a pre-built .annotator.idx companion file even if "
+             "one exists next to the gtfdb.",
+    )
+    args = parser.parse_args()
+
+    if args.cores < 1:
+        parser.error("--cores must be a positive integer")
 
     input_bed_files = args.input
     output_annotated_files = args.output
+    if output_annotated_files is None:
+        output_annotated_files = [
+            bed_file + '.annotated' for bed_file in input_bed_files
+        ]
+    elif len(output_annotated_files) != len(input_bed_files):
+        parser.error("number of --output files must match number of --input files")
+
     gtfdb_file = args.gtfdb
     chroms = args.limit_chroms_to
-    unstranded = args.unstranded
+    stranded = not args.unstranded
     gtf_format = args.gtf_format
     append_chr = args.append_chr
-    cores = 1  # TODO: implement later - unnecessary now
-    fuzzy = 0  # TODO: implement later - unnecessary now
+    cores = args.cores
+    fuzzy = 0
 
-    # Flipping this terminology to make it easier to understand
-    if unstranded:
-        stranded = False
-    else:
-        stranded = True
-
-    # If appropriate priorities are unassigned, assign to defaults
     if args.transcript_priority_file is not None:
         transcript_priority = parse_annotation_priority(
             args.transcript_priority_file)
     else:
-        transcript_priority = TRANSCRIPT_PRIORITY
+        transcript_priority = [list(item) for item in TRANSCRIPT_PRIORITY]
 
     if args.gene_priority_file is not None:
         gene_priority = parse_annotation_priority(args.gene_priority_file)
     else:
-        gene_priority = GENE_PRIORITY
+        gene_priority = [list(item) for item in GENE_PRIORITY]
 
-    # Call main function
     annotate_bed.annotate_bed(
         gtfdb_file, input_bed_files, output_annotated_files, stranded, chroms,
         transcript_priority, gene_priority, gtf_format, append_chr,
-        fuzzy, cores
+        fuzzy, cores, use_index=args.use_index
     )
 
 

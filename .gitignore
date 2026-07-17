@@ -69,8 +69,8 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# pyenv
-.python-version
+# MkDocs build output
+site/
 
 # celery beat schedule file
 celerybeat-schedule
@@ -109,3 +109,12 @@ ENV/
 datasets/
 examples/
 tests/
+
+# local benchmark artifacts
+benchmark/*-venv/
+benchmark/*.db
+benchmark/*.bed
+*.annotator.idx
+benchmark/*.meta.txt
+benchmark/*.time
+annotator/test/.db_cache/

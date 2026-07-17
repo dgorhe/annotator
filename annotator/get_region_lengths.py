@@ -1,7 +1,9 @@
 #!/usr/bin/env python
+"""Calculate average and total genomic region lengths from a gffutils database.
 
-# Calculates the average and total sizes of each region
-
+Reports CDS, UTR, and intron lengths (total and average) for use in metagene
+plots and region-distribution summaries.
+"""
 
 # from __future__ import print_function
 # from __future__ import division
@@ -25,14 +27,15 @@ from collections import defaultdict
 
 
 def calculate_total_cds_length(db, keys):
-    """
-    Calculates the total length of all CDS features in a db
+    """Calculate the total non-overlapping CDS length across all transcripts.
 
-    :param db: gffutils.FeatureDB
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing
-    :return total_coverage: int
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        keys (dict): Species-specific GTF column naming scheme; maps logical
+            region names (e.g. ``'cds'``) to feature type strings.
+
+    Returns:
+        int: Total CDS coverage in base pairs.
     """
 
     ### This method counts every CDS feature, may double count overlapping features ###
@@ -51,21 +54,21 @@ def calculate_total_cds_length(db, keys):
 
 
 def calculate_avg_cds_length(db, keys):
-    """
-    Calculates the average length of CDS regions for each transcript.
+    """Calculate the average total CDS length per transcript.
 
-    :param db: gffutils.FeatureDB
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing
-    :return avg_cds_len: float
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        keys (dict): Species-specific GTF column naming scheme.
+
+    Returns:
+        float: Mean CDS length across transcripts, in base pairs.
     """
 
     cds_feature_tx_lengths = defaultdict(list)
 
     # get all cds regions that belong to each transcript
     for cds_feature in db.features_of_type(keys['cds']):
-        for transcript in cds_feature.attributes['transcript_id']:
+        for transcript in cds_feature.attributes[keys['transcript_id']]:
             cds_feature_tx_lengths[transcript].append(
                 cds_feature.end - cds_feature.start)
 
@@ -79,31 +82,19 @@ def calculate_avg_cds_length(db, keys):
 
 
 def calculate_total_utr_lengths(db, cds_dict, keys):
+    """Calculate total non-overlapping 5' and 3' UTR lengths.
+
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        cds_dict (collections.defaultdict): Mapping
+            ``{transcript_id: {'start': int, 'end': int}}`` of CDS bounds.
+        keys (dict): Species-specific GTF column naming scheme.
+
+    Returns:
+        tuple: ``(total_five_prime_utr_length, total_three_prime_utr_length)``
+            in base pairs from merged non-overlapping UTR BED coverage.
     """
-    Calculates the total length of all UTR features in a db
 
-    :param db: gffutils.FeatureDB
-    :param cds_dict: collections.defaultdict
-        defaultdict{transcript:{'start':START, 'end':END}}
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing
-    :return total_coverage: int
-    """
-
-    total_five_prime_utr_tx_lengths = 0
-    total_three_prime_utr_tx_lengths = 0
-
-    ### This method counts every UTR feature - may double count overlapping features ###
-    # Use CDS dict to determine for each UTR, whether it's 3/5'
-    # for utr_feature in db.features_of_type(chr19_keys['utr']):
-    #     classified_utr = annotate_bed.classify_utr(utr_feature, chr19_cds_dict)
-    #     if classified_utr == '5utr':
-    #         total_five_prime_utr_tx_lengths += (utr_feature.end - utr_feature.start)
-    #     elif classified_utr == '3utr':
-    #         total_three_prime_utr_tx_lengths += (utr_feature.end - utr_feature.start)
-
-    ### This method counts only nonoverlapping UTR regions ###
     utr5_out = None  # no need to write to file
     utr3_out = None  # no need to write to file
     by_transcript = True  # dont merge per gene, keep transcript separate
@@ -114,22 +105,24 @@ def calculate_total_utr_lengths(db, cds_dict, keys):
     utr5 = utr5.sort()
     utr3 = utr3.sort()
 
-    print('five_prime_utr_lengths (total): {}'.format(utr5.total_coverage()))
-    print('three_prime_utr_lengths (total): {}'.format(utr3.total_coverage()))
+    total_five_prime_utr_tx_lengths = utr5.total_coverage()
+    total_three_prime_utr_tx_lengths = utr3.total_coverage()
+    print('five_prime_utr_lengths (total): {}'.format(total_five_prime_utr_tx_lengths))
+    print('three_prime_utr_lengths (total): {}'.format(total_three_prime_utr_tx_lengths))
     return total_five_prime_utr_tx_lengths, total_three_prime_utr_tx_lengths
 
 
 def calculate_avg_utr_lengths(db, cds_dict, keys):
-    """
-    Calculates the average length of all UTR features in a db
+    """Calculate average 5' and 3' UTR lengths per transcript.
 
-    :param db: gffutils.FeatureDB
-    :param cds_dict: collections.defaultdict
-        defaultdict{transcript:{'start':START, 'end':END}}
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing 
-    :return: 
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        cds_dict (collections.defaultdict): Mapping
+            ``{transcript_id: {'start': int, 'end': int}}`` of CDS bounds.
+        keys (dict): Species-specific GTF column naming scheme.
+
+    Returns:
+        None: Results are printed to stdout.
     """
 
     # {transcript_id: [len(tx1), len(tx2), ...]
@@ -138,14 +131,16 @@ def calculate_avg_utr_lengths(db, cds_dict, keys):
 
     # Use CDS dict to determine length for all UTRs, whether it's 3/5'
     for utr_feature in db.features_of_type(keys['utr']):
-        classified_utr = af.classify_utr(utr_feature, cds_dict)
+        classified_utr = af.classify_utr(
+            utr_feature, cds_dict, keys['transcript_id']
+        )
         if classified_utr == '5utr':
-            for transcript in utr_feature.attributes['transcript_id']:
+            for transcript in utr_feature.attributes[keys['transcript_id']]:
                 five_prime_utr_tx_lengths[transcript].append(
                     utr_feature.end - utr_feature.start
                 )
         elif classified_utr == '3utr':
-            for transcript in utr_feature.attributes['transcript_id']:
+            for transcript in utr_feature.attributes[keys['transcript_id']]:
                 three_prime_utr_tx_lengths[transcript].append(
                     utr_feature.end - utr_feature.start
                 )
@@ -182,14 +177,18 @@ def calculate_avg_utr_lengths(db, cds_dict, keys):
 
 
 def calculate_total_intron_lengths(db, exons_dict, transcripts_dict, keys):
-    """
-    Calculates the total length of distal, proximal, and all introns.
+    """Calculate total proximal, distal, and combined intron lengths.
 
-    :param db: 
-    :param exons_dict: 
-    :param transcripts_dict: 
-    :param keys: 
-    :return: 
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        exons_dict: Transcript-to-exon mapping from
+            ``annotation_functions.get_all_exons_dict``.
+        transcripts_dict: Transcript feature mapping from
+            ``annotation_functions.get_all_transcripts_dict``.
+        keys (dict): Species-specific GTF column naming scheme.
+
+    Returns:
+        None: Results are printed to stdout.
     """
 
     proxintron_out = None  # don't write to any file
@@ -213,39 +212,43 @@ def calculate_total_intron_lengths(db, exons_dict, transcripts_dict, keys):
 
 
 def calculate_avg_lengths(db_file, species):
-    """
-    Prints all average lengths for CDS and 3/5'UTRs.
+    """Print average CDS and UTR lengths for a gffutils database.
+
     Can be used to generate ratios for metagene plots.
 
-    :param db_file: gffutils.FeatureDB
-    :param species: string
-        used to generate chr19_keys corresonding to GTF column nomenclature.
-    :return: 
+    Args:
+        db_file (str): Path to a gffutils database file.
+        species (str): Species identifier used to select GTF column nomenclature.
+
+    Returns:
+        None: Results are printed to stdout.
     """
 
     keys = af.get_keys(species)
     db = gffutils.FeatureDB(db_file)
 
-    cds_dict = af.get_all_cds_dict(db, keys['cds'])
+    cds_dict = af.get_all_cds_dict(db, keys['cds'], keys['transcript_id'])
 
     calculate_avg_cds_length(db, keys)
     calculate_avg_utr_lengths(db, cds_dict, keys)
 
 
 def calculate_total_lengths(db_file, species):
-    """"
-    Prints number of bases labeled as CDS, UTR, and intron in a gtf db file.
-    Can be used to generate ratios for region distribution pie charts.
+    """Print total CDS, UTR, and intron base counts for a gffutils database.
 
-    :param db_file: gffutils.FeatureDB
-    :param species: string
-        used to generate chr19_keys corresonding to GTF column nomenclature.
-    :return: 
+    Can be used to generate ratios for region-distribution pie charts.
+
+    Args:
+        db_file (str): Path to a gffutils database file.
+        species (str): Species identifier used to select GTF column nomenclature.
+
+    Returns:
+        None: Results are printed to stdout.
     """
     keys = af.get_keys(species)
     db = gffutils.FeatureDB(db_file)
 
-    cds_dict = af.get_all_cds_dict(db, keys['cds'])
+    cds_dict = af.get_all_cds_dict(db, keys['cds'], keys['transcript_id'])
     exons_dict = af.get_all_exons_dict(
         db,
         exon_key=keys['exon'],
@@ -263,6 +266,7 @@ def calculate_total_lengths(db_file, species):
 
 
 def main():
+    """Parse CLI arguments and print average and total region lengths."""
     # Setup argument parser
     parser = ArgumentParser()
 

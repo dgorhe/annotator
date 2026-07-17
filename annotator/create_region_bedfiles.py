@@ -1,8 +1,10 @@
 #!/usr/bin/env python
+"""Parse a GTF database and create BED files for genomic regions.
 
-# Parses a GTF file and creates bedfiles corresponding to 5 distinct regions:
-# CDS, 3'UTR, 5'UTR, proximal intron (500bp), distal intron (500bp).
-# Warning: this takes a long time!
+Generates BED files for CDS, 3' UTR, 5' UTR, proximal intron (500 bp),
+distal intron (500 bp), exons, genes, and full introns from a gffutils
+FeatureDB. Warning: this process can take a long time.
+"""
 
 # these two are really a minimum
 
@@ -22,27 +24,59 @@
 from argparse import ArgumentParser
 import sys
 import gffutils
-import pybedtools
-import pandas as pd
 from collections import defaultdict
 from . import annotation_functions as af
 from tqdm import trange
 
+try:
+    import pybedtools
+except ImportError:
+    pybedtools = None
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+
+def _require_pybedtools():
+    """Return pybedtools or raise a clear install hint."""
+    if pybedtools is None:
+        raise ImportError(
+            "pybedtools is required for create_region_bedfiles. "
+            "Install with: pip install 'annotator[regions]'"
+        )
+    return pybedtools
+
+
+def _require_pandas():
+    """Return pandas or raise a clear install hint."""
+    if pd is None:
+        raise ImportError(
+            "pandas is required for create_region_bedfiles. "
+            "Install with: pip install 'annotator[regions]'"
+        )
+    return pd
+
 
 def create_bedtools(features, keys, by_transcript=False):
-    """
-    Given a list of features and chr19_keys dictionary, create a bedtool
-    containing intervals of features whose name is specified
-    using chr19_keys['gene_id']
+    """Create a BedTool from gffutils features with gene or transcript IDs as names.
 
-    :param features: list
-        list of gffutils features (1-based) for which to convert
-        to bedtool intervals
-    :param keys: dict
-        a set of chr19_keys and values which helps translate different
-        GTF/GFF nomenclatures (ie. 'cds'
-    :return:
+    Given a list of features and a keys dictionary, build bedtool intervals whose
+    name field is taken from ``keys['gene_id']`` or ``keys['transcript_id']``.
+
+    Args:
+        features (list): gffutils features (1-based coordinates) to convert to
+            bedtool intervals.
+        keys (dict): Maps logical names (e.g. ``'gene_id'``) to GTF/GFF attribute
+            keys for nomenclature translation.
+        by_transcript (bool): If True, use transcript IDs as interval names;
+            otherwise use gene IDs. Defaults to False.
+
+    Returns:
+        pybedtools.BedTool: Intervals for each feature attribute value.
     """
+    pybedtools = _require_pybedtools()
     intervals = []
     key = 'transcript_id' if by_transcript else 'gene_id'
     progress = trange(len(features), desc='creating bedtools.')
@@ -60,26 +94,31 @@ def create_bedtools(features, keys, by_transcript=False):
 
 
 def merge_bedtool_by_gene(bedtool):
+    """Merge overlapping intervals while preserving distinct feature names.
+
+    Unlike ``bedtools merge``, intervals with different names are merged
+    separately per name.
+
+    Example::
+
+        chr1    100 200 GENE1   0   +
+        chr1    150 230 GENE1   0   +
+        chr1    150 250 GENE2   0   +
+
+    becomes::
+
+        chr1    100 230 GENE1   0   +
+        chr1    150 250 GENE2   0   +
+
+    Args:
+        bedtool (pybedtools.BedTool): Input intervals to merge by name.
+
+    Returns:
+        pandas.DataFrame: Unique merged entries per distinct name, with columns
+            ``chrom``, ``start``, ``end``, ``name``, ``score``, ``strand``.
     """
-    Takes a bedtool and does a merge, but preserves the distinct names.
-    This is different than using bedtools merge.
-
-    ie.
-
-    chr1    100 200 GENE1   0   +
-    chr1    150 230 GENE1   0   +
-    chr1    150 250 GENE2   0   +
-
-    ->
-
-    chr1    100 230 GENE1   0   +
-    chr1    150 250 GENE2   0   +
-
-    :param bedtool: pybedtools.BedTool
-
-    :return merged: pandas.DataFrame
-        table containing unique merged entries per distinct name.
-    """
+    pd = _require_pandas()
+    pybedtools = _require_pybedtools()
     df = bedtool.to_dataframe()
     merged = pd.DataFrame(
         columns=['chrom', 'start', 'end', 'name',
@@ -108,17 +147,19 @@ def merge_bedtool_by_gene(bedtool):
 
 
 def create_cds_region_bedfile(db, keys, cds_out, by_transcript=False):
-    """
-    Creates the CDS region bedfile from a gffutils FeatureDB.
+    """Create a CDS region BED file from a gffutils FeatureDB.
 
-    :param db: gffutils.FeatureDB
-        gffutils sqlite db object
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing
-    :param cds_out: str
-        file name for output bedfile
-    :return cds: 
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        keys (dict): Species-specific GTF naming scheme; maps logical region
+            names (e.g. ``'cds'``) to feature type strings.
+        cds_out (str or None): Output BED file path; if None, no file is written.
+        by_transcript (bool): If True, output one row per transcript without
+            merging; otherwise merge overlapping intervals by gene. Defaults to
+            False.
+
+    Returns:
+        pybedtools.BedTool: CDS intervals before optional file export.
     """
     cds_features = []
 
@@ -141,17 +182,17 @@ def create_cds_region_bedfile(db, keys, cds_out, by_transcript=False):
 
 
 def create_exon_region_bedfile(db, keys, exon_out, by_transcript=False):
-    """
-    Creates the exon region bedfile from a gffutils FeatureDB.
+    """Create an exon region BED file from a gffutils FeatureDB.
 
-    :param db: gffutils.FeatureDB
-        gffutils sqlite db object
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme
-         for GTF parsing
-    :param cds_out: str
-        file name for output bedfile
-    :return:
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        keys (dict): Species-specific GTF naming scheme.
+        exon_out (str): Output BED file path.
+        by_transcript (bool): If True, output sorted intervals per transcript;
+            otherwise merge by gene before export. Defaults to False.
+
+    Returns:
+        None
     """
     exon_features = []
 
@@ -172,17 +213,15 @@ def create_exon_region_bedfile(db, keys, exon_out, by_transcript=False):
 
 
 def create_gene_region_bedfile(db, keys, gene_out):
-    """
-    Creates the exon region bedfile from a gffutils FeatureDB.
+    """Create a gene region BED file from a gffutils FeatureDB.
 
-    :param db: gffutils.FeatureDB
-        gffutils sqlite db object
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme
-         for GTF parsing
-    :param cds_out: str
-        file name for output bedfile
-    :return:
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        keys (dict): Species-specific GTF naming scheme.
+        gene_out (str): Output BED file path.
+
+    Returns:
+        None
     """
     gene_features = []
     gene_hash = defaultdict(list)
@@ -210,33 +249,31 @@ def create_gene_region_bedfile(db, keys, gene_out):
 
 
 def create_utr_region_bedfiles(db, keys, cds_dict, utr3_out, utr5_out, by_transcript=False):
-    """
-    Creates UTR bedfiles from a gffutils FeatureDB.
+    """Create 5' and 3' UTR BED files from a gffutils FeatureDB.
 
-    :param db: gffutils.FeatureDB
-        gffutils sqlite db object
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing
-    :param cds_dict: dict
-        dictionary of {transcript:cds_regions}
-    :param utr3_out: str
-        file name for output bedfile
-    :param utr5_out: str
-        file name for output bedfile
-    :param by_transcript: bool
-        if True, return all UTR regions, regardless (every UTR in every transcript is reported)
-        if False, return all UTR regions as a merged region according to gene
-        (merged, unoverlapping UTR region is reported for every gene)
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        keys (dict): Species-specific GTF naming scheme. Must include either
+            ``'utr'`` or both ``'utr3'`` and ``'utr5'``.
+        cds_dict (dict): Mapping ``{transcript_id: cds_regions}`` used to classify
+            generic UTR features as 5' or 3'.
+        utr3_out (str or None): Output path for 3' UTR BED file.
+        utr5_out (str or None): Output path for 5' UTR BED file.
+        by_transcript (bool): If True, report every UTR in every transcript;
+            if False, merge UTR regions by gene. Defaults to False.
 
-    :return: 
+    Returns:
+        tuple: ``(utr5, utr3)`` as ``pybedtools.BedTool`` objects, or ``1`` on
+            failure when UTR keys cannot be determined.
     """
     five_prime_utr_features = []
     three_prime_utr_features = []
     # Use CDS dict to determine for each UTR, whether it's 3/5'
     if keys['utr'] is not None:
         for utr_feature in db.features_of_type(keys['utr']):
-            classified_utr = af.classify_utr(utr_feature, cds_dict)
+            classified_utr = af.classify_utr(
+                utr_feature, cds_dict, keys['transcript_id']
+            )
             if classified_utr == '5utr':
                 five_prime_utr_features.append(utr_feature)
             elif classified_utr == '3utr':
@@ -280,24 +317,27 @@ def create_utr_region_bedfiles(db, keys, cds_dict, utr3_out, utr5_out, by_transc
 
 def create_intron_region_bedfiles(db, exons_dict, transcripts_dict, keys,
                                   proxintron_out, distintron_out, allintron_out, by_transcript):
-    """
-    Creates prox and distal intron bedfiles from a gffutils FeatureDB.
+    """Create proximal, distal, and full intron BED files.
 
-    :param db: gffutils.FeatureDB
-        gffutils sqlite db object
-    :param keys: dict
-        {'region':region defined in GTF}. Sets the naming scheme 
-         for GTF parsing
-    :param exons_dict: dict
-        dictionary of {transcript:exon_regions}
-    :param transcripts_dict: dict
-        dictionary of {transcript:gffutils.Features}
-    :param proxintron_out: str
-        file name for output bedfile
-    :param distintron_out: str
-        file name for output bedfile
-    :return: 
+    Proximal and distal introns are defined as the first and last 500 bp of each
+    intron, respectively.
+
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        exons_dict (dict): Mapping ``{transcript_id: exon_regions}``.
+        transcripts_dict (dict): Mapping ``{transcript_id: gffutils.Feature}``.
+        keys (dict): Species-specific GTF naming scheme.
+        proxintron_out (str or None): Output path for proximal intron BED file.
+        distintron_out (str or None): Output path for distal intron BED file.
+        allintron_out (str or None): Output path for full intron BED file.
+        by_transcript (bool): If True, name intervals by transcript ID; otherwise
+            merge by gene ID.
+
+    Returns:
+        tuple: ``(proxintrons, distintrons, allintrons)`` as
+            ``pybedtools.BedTool`` objects.
     """
+    pybedtools = _require_pybedtools()
     allintrons = []
     proxintrons = []
     distintrons = []
@@ -322,6 +362,9 @@ def create_intron_region_bedfiles(db, exons_dict, transcripts_dict, keys,
             if element.featuretype == 'transcript':
                 # transcript_id is iterable here, one element may associate w/ multiple txids?
                 for transcript_id in element.attributes[keys['transcript_id']]:
+                    if (transcript_id not in exons_dict or
+                            transcript_id not in transcripts_dict):
+                        continue
                     exons = exons_dict[transcript_id]
                     transcript = transcripts_dict[transcript_id]
                     # Given a transcript ID and its exons, find introns
@@ -376,7 +419,7 @@ def create_intron_region_bedfiles(db, exons_dict, transcripts_dict, keys,
         )
 
     if by_transcript:
-        allintronsdf = distintrons.to_dataframe()
+        allintronsdf = allintrons.to_dataframe()
     else:
         allintronsdf = merge_bedtool_by_gene(allintrons)
 
@@ -391,6 +434,29 @@ def create_region_bedfiles(
         db_file, species, cds_out, utr3_out, utr5_out,
         proxintron_out, distintron_out, allintron_out, gene_out, exon_out, by_transcript
 ):
+    """Generate selected genomic region BED files from a gffutils database.
+
+    Orchestrates CDS, UTR, intron, gene, and exon BED file creation based on
+    which output paths are non-None.
+
+    Args:
+        db_file (str): Path to the gffutils SQLite database.
+        species (str): Species identifier passed to ``af.get_keys`` for GTF
+            nomenclature.
+        cds_out (str or None): Output path for CDS BED file.
+        utr3_out (str or None): Output path for 3' UTR BED file.
+        utr5_out (str or None): Output path for 5' UTR BED file.
+        proxintron_out (str or None): Output path for proximal intron BED file.
+        distintron_out (str or None): Output path for distal intron BED file.
+        allintron_out (str or None): Output path for full intron BED file.
+        gene_out (str or None): Output path for gene BED file.
+        exon_out (str or None): Output path for exon BED file.
+        by_transcript (bool): If True, report regions per transcript instead of
+            merging by gene where applicable.
+
+    Returns:
+        None
+    """
     ### get the parsed regions ###
 
     keys = af.get_keys(species)
@@ -403,7 +469,9 @@ def create_region_bedfiles(
 
     # Creates 3 and 5' UTR regions
     if utr3_out is not None or utr5_out is not None:
-        cds_dict = af.get_all_cds_dict(db, keys['cds'])
+        cds_dict = af.get_all_cds_dict(
+            db, keys['cds'], keys['transcript_id']
+        )
         create_utr_region_bedfiles(
             db, keys, cds_dict, utr3_out, utr5_out, by_transcript)
 
@@ -411,8 +479,8 @@ def create_region_bedfiles(
     if proxintron_out is not None or distintron_out is not None or allintron_out is not None:
         exons_dict = af.get_all_exons_dict(
             db, keys['exon'], keys['transcript_id'])
-        transcripts_dict = af.get_all_transcripts_dict(db, keys['exon'], keys[
-            'transcript_id'])
+        transcripts_dict = af.get_all_transcripts_dict(
+            db, keys['transcript'], keys['transcript_id'])
         create_intron_region_bedfiles(
             db, exons_dict, transcripts_dict, keys,
             proxintron_out, distintron_out, allintron_out, by_transcript
@@ -427,6 +495,10 @@ def create_region_bedfiles(
 
 
 def main():
+    """Command-line entry point for creating genomic region BED files.
+
+    Parses arguments and calls ``create_region_bedfiles``.
+    """
     # Setup argument parser
     parser = ArgumentParser()
 

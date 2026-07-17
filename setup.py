@@ -7,7 +7,7 @@ except ImportError:
 
 setup(
     name='annotator',
-    version='0.1.0',
+    version='0.2.0',
     url='github.com/byee4/annotator',
     license='',
     author='brianyee',
@@ -17,9 +17,21 @@ setup(
     install_requires=[
         'tqdm',
         'gffutils',
-        'pybedtools',
-        'pandas',
     ],
+    extras_require={
+        'regions': ['pybedtools>=0.9', 'pandas>=1.0'],
+        'utils': ['pandas>=1.0'],
+        'dev': [
+            'pytest>=7.0',
+            'autopep8>=2.0',
+            'flake8>=7.0',
+            'flake8-pyproject>=1.2.0',
+            'mkdocs>=1.6',
+            'mkdocs-material>=9.5',
+            'mkdocstrings[python]>=0.27',
+            'mkdocs-llmstxt>=0.5.0',
+        ],
+    },
     package_dir={
         'annotator': 'annotator',
     },

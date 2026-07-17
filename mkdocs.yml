@@ -1,0 +1,73 @@
+site_name: Annotator
+site_description: Annotate BED files with genic information from GTF databases
+site_url: http://127.0.0.1:8000/
+repo_url: https://github.com/byee4/annotator
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.expand
+    - navigation.indexes
+    - content.code.copy
+    - search.suggest
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            merge_init_into_class: true
+            members_order: source
+            filters:
+              - "!^_MP_STATE$"
+              - "!^FEATURES_DICT$"
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Documentation:
+          - index.md
+        API Reference:
+          - api/index.md
+          - api/*.md
+
+nav:
+  - Home: index.md
+  - API Reference:
+      - Overview: api/index.md
+      - annotator: api/annotator.md
+      - annotate_bed: api/annotate_bed.md
+      - annotation_functions: api/annotation_functions.md
+      - index_store: api/index_store.md
+      - intervals: api/intervals.md
+      - build_gffutils_db: api/build_gffutils_db.md
+      - create_region_bedfiles: api/create_region_bedfiles.md
+      - get_region_lengths: api/get_region_lengths.md
+      - gene_name2id: api/gene_name2id.md
+      - miRNA_name2id: api/miRNA_name2id.md
+      - create_AS_STRUCTURE: api/create_AS_STRUCTURE.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - admonition
+  - toc:
+      permalink: true

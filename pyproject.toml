@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "annotator"
+version = "0.2.0"
+description = "Annotate BED files with genic information given a priority list"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "" }
+authors = [{ name = "brianyee" }]
+dependencies = [
+    "tqdm>=4.14",
+    "gffutils>=0.9",
+]
+
+[project.optional-dependencies]
+regions = ["pybedtools>=0.9", "pandas>=1.0"]
+utils = ["pandas>=1.0"]
+dev = [
+    "pytest>=7.0",
+    "autopep8>=2.0",
+    "flake8>=7.0",
+    "flake8-pyproject>=1.2.0",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mkdocs-llmstxt>=0.5.0",
+]
+
+[tool.autopep8]
+max_line_length = 120
+aggressive = 1
+
+[tool.flake8]
+max-line-length = 120
+extend-exclude = [
+    "benchmark",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    ".eggs",
+    "*.egg-info",
+    ".db_cache",
+]
+extend-ignore = [
+    "E203",
+    "W503",
+]
+
+[project.scripts]
+annotator = "annotator.annotator:main"
+create_region_bedfiles = "annotator.create_region_bedfiles:main"
+miRNA_name2id = "annotator.miRNA_name2id:main"
+gene_name2id = "annotator.gene_name2id:main"
+build_gffutils_db = "annotator.build_gffutils_db:main"
+get_region_lengths = "annotator.get_region_lengths:main"
+create_as_structure = "annotator.create_AS_STRUCTURE:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["annotator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["annotator/test"]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "autopep8>=2.0",
+    "flake8>=7.0",
+    "flake8-pyproject>=1.2.0",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mkdocs-llmstxt>=0.5.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+package = true

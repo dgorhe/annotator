@@ -1,7 +1,9 @@
 #!/usr/bin/env python
+"""Convert tabular files labeled with gene names to gene IDs.
 
-# Converts a file that is labeled with gene names into one that is labeled
-# with gene ids
+Uses a gffutils database and/or a custom id-to-name mapping file to look up
+gene IDs and append them to an input table.
+"""
 
 # from __future__ import print_function
 # from __future__ import division
@@ -20,12 +22,31 @@ from argparse import ArgumentParser
 import sys
 
 import gffutils
-import pandas as pd
 from collections import defaultdict
 
 
+def _require_pandas():
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError(
+            "pandas is required for gene_name2id. "
+            "Install with: pip install 'annotator[utils]'"
+        ) from exc
+    return pd
+
+
 def get_id_from_namerow(row, name2id, name_col):
-    """ Uses name2id dict to return the id with the associated name. """
+    """Look up gene ID(s) for a single row's gene name.
+
+    Args:
+        row (pandas.Series): Row containing a gene name column.
+        name2id (dict): Mapping from gene name to list of gene IDs.
+        name_col (str): Column name holding the gene name.
+
+    Returns:
+        str: Pipe-delimited gene ID(s), or an empty string if the name is missing.
+    """
     try:
         return '|'.join(name2id[str(row[name_col])])
     except KeyError:
@@ -34,7 +55,16 @@ def get_id_from_namerow(row, name2id, name_col):
 
 
 def add_id_to_dataframe(df, name2id_dict, name_col):
-    """ adds id values to pandas dataframe """
+    """Append a ``gene id`` column to a dataframe.
+
+    Args:
+        df (pandas.DataFrame): Input table with gene names.
+        name2id_dict (dict): Mapping from gene name to list of gene IDs.
+        name_col (str): Column name holding the gene name.
+
+    Returns:
+        pandas.DataFrame: Copy of ``df`` with a new ``gene id`` column.
+    """
     assert 'gene id' not in df.columns
     df['gene id'] = df.apply(get_id_from_namerow, args=[
                              name2id_dict, name_col], axis=1)
@@ -42,19 +72,20 @@ def add_id_to_dataframe(df, name2id_dict, name_col):
 
 
 def build_name_to_id_dict(gffdb_file, custom_file):
-    """
-    Returns {gene_name:gene_id} dictionary.
-    Names with more than 1 associated ID will be appended, delimited by |.
+    """Build a gene-name-to-ID mapping from a gffutils DB and/or custom file.
 
-    :param gffdb_file: string
-        path of the gtfdb.
-        Database must contain:
-        'gene' in featuretype field
-        'gene_name' in feature.attributes.chr19_keys()
-        'gene_id' in feature.attributes.chr19_keys()
+    Names with more than one associated ID are stored as a list; callers join
+    multiple IDs with ``|``.
 
-    :return name2id_dict: dict
-        {gene_name:gene_id[]}
+    Args:
+        gffdb_file (str or None): Path to a gffutils database. The database
+            must contain ``gene`` features with ``gene_name`` and ``gene_id``
+            attributes.
+        custom_file (str or None): Tab-delimited file of ``gene_id<TAB>gene_name``
+            rows for genes not present in the gffutils database.
+
+    Returns:
+        dict: Mapping ``{gene_name: [gene_id, ...]}``.
     """
     # delim = '|'
     name2id = defaultdict(list)
@@ -84,23 +115,22 @@ def build_name_to_id_dict(gffdb_file, custom_file):
 
 
 def read_and_append_id(in_file, sep, name_col, gffdb_file, custom_file, delete_original_column):
-    """
-    Reads in a delimited file with miRNA names in at least one column
-    Returns dataframe containing matching miRNA precursor ids.
+    """Read a delimited file and append matching gene IDs.
 
-    :param in_file: string
-        input delimited file
-    :param sep: string
-        delimiter
-    :param name_col: string
-        column name where miRNA names exist
-    :param gffdb_file: string
-        path to gffutils database file
-    :param delete_original_column: bool
-        if True, delete the original name column (specified with name_col)
-        if False, keep it.
-    :return: 
+    Args:
+        in_file (str): Path to the input delimited file.
+        sep (str): Field delimiter.
+        name_col (str): Column name containing gene names.
+        gffdb_file (str or None): Path to a gffutils database file.
+        custom_file (str or None): Path to a custom id-to-name mapping file.
+        delete_original_column (bool): If True, remove ``name_col`` and index
+            by ``gene id``; otherwise keep ``name_col`` as the index.
+
+    Returns:
+        pandas.DataFrame: Table with gene IDs appended and index set as
+        described above.
     """
+    pd = _require_pandas()
     df = pd.read_table(in_file, sep=sep)
 
     name2id_dict = build_name_to_id_dict(gffdb_file, custom_file)
@@ -115,6 +145,18 @@ def read_and_append_id(in_file, sep, name_col, gffdb_file, custom_file, delete_o
 
 
 def convert(in_file, sep, name_col, out_file, gtfdb_file, custom_file, delete_original_column):
+    """Read an input file, append gene IDs, and write the result.
+
+    Args:
+        in_file (str): Path to the input delimited file.
+        sep (str): Field delimiter.
+        name_col (str): Column name containing gene names.
+        out_file (str): Path to the output file.
+        gtfdb_file (str or None): Path to a gffutils database file.
+        custom_file (str or None): Path to a custom id-to-name mapping file.
+        delete_original_column (bool): If True, drop the original name column
+            before writing.
+    """
     df = read_and_append_id(
         in_file, sep, name_col, gtfdb_file, custom_file,
         delete_original_column
@@ -123,6 +165,7 @@ def convert(in_file, sep, name_col, out_file, gtfdb_file, custom_file, delete_or
 
 
 def main():
+    """Parse CLI arguments and run gene-name-to-ID conversion."""
     # Setup argument parser
     parser = ArgumentParser()
 

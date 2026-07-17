@@ -1,17 +1,22 @@
 #!/usr/bin/env python
 
+from pathlib import Path
+
 from annotator import annotate_bed as a
 from annotator import annotation_functions as af
 from annotator import annotator
+from annotator.test.db_fixtures import ensure_db
 import gffutils
 
+TEST_DATA = Path(__file__).parent / "data"
+
 CHROMS = ['III']
-DB_FILE = 'test/data/c_elegans.PRJNA13758.WS257.canonical_geneset.chrIII.25000.gtf.db'
-SPECIES = 'ce11'
+DB_FILE = ensure_db('c_elegans.PRJNA13758.WS257.canonical_geneset.chrIII.25000.gtf')
+GTF_FORMAT = 'ce11'
 
 exons_dict, \
 transcripts_dict, cds_dict, features_dict, keys = a.create_definitions(
-    DB_FILE, CHROMS, SPECIES
+    DB_FILE, CHROMS, GTF_FORMAT
 )
 
 def get_transcript_id(st):
@@ -28,14 +33,14 @@ def transcript_priority_1():
 
 def get_3utr_features_1():
     utr3_features = []
-    with open('test/data/c_elegans.PRJNA13758.WS257.canonical_geneset.H10E21.3a.3UTR.gtf', 'r') as f:
+    with open(TEST_DATA / 'c_elegans.PRJNA13758.WS257.canonical_geneset.H10E21.3a.3UTR.gtf', 'r') as f:
         for line in f:
             utr3_features.append(gffutils.feature.feature_from_line(line))
     return utr3_features
 
 def get_5utr_features_1():
     utr5_features = []
-    with open('test/data/c_elegans.PRJNA13758.WS257.canonical_geneset.H10E21.3a.5UTR.gtf', 'r') as f:
+    with open(TEST_DATA / 'c_elegans.PRJNA13758.WS257.canonical_geneset.H10E21.3a.5UTR.gtf', 'r') as f:
         for line in f:
             utr5_features.append(gffutils.feature.feature_from_line(line))
     return utr5_features
@@ -66,7 +71,7 @@ def test_annotate_prioritize_cds_1():
         ['protein_coding', 'CDS'], ['protein_coding', 'exon'],
     ]
 
-    stranded = True,
+    stranded = True
     # transcript_priority = transcript_priority_1()
     # gene_priority = gene_priority_1()
 
@@ -98,7 +103,7 @@ def test_annotate_prioritize_cds_2():
         ['protein_coding', '3UTR'], ['protein_coding', 'CDS'],
     ]
 
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -127,7 +132,7 @@ def test_annotate_prioritize_1():
     qname = 'H10E21.1b'
     qscore = 0
     qstrand = '+'
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -157,7 +162,7 @@ def test_annotate_prioritize_2():
     qname = 'H10E21.1b'
     qscore = 0
     qstrand = '+'
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -187,7 +192,7 @@ def test_annotate_prioritize_3():
     qname = 'H10E21.1b'
     qscore = 0
     qstrand = '+'
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,
@@ -218,7 +223,7 @@ def test_annotate_prioritize_4():
         ['protein_coding', 'CDS'],
     ]
 
-    stranded = True,
+    stranded = True
     chrom, start, end, name, score, strand, \
     gene, rname, region, annotation = a.annotate(
         qchrom, qstart, qstop, qname, qscore, qstrand,

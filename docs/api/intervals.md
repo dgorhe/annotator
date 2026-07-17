@@ -1,0 +1,3 @@
+# intervals
+
+::: annotator.intervals

@@ -1,21 +1,25 @@
 #!/usr/bin/env python
+"""Generate AS_STRUCTURE BED records with mRNA and pre-mRNA lengths per gene.
 
-"""
-basic module to use as an example.
+Writes one tab-delimited record per gene from a gffutils database, including
+genomic coordinates and ``mrna_length`` / ``premrna_length`` attributes.
 """
 import argparse
 import gffutils
 from tqdm import trange
 from . import annotation_functions as af
 
+
 def create_as_structure(db, species, out_file):
-    """
-    
-    :param db: gffutils.FeatureDB
-    :param species: string
-        sets the gtf nomenclature
-    :param out_file: string
-    :return: 
+    """Write AS_STRUCTURE records with per-gene transcript length metadata.
+
+    Args:
+        db (gffutils.FeatureDB): Annotation database.
+        species (str): Species identifier used to select GTF column nomenclature.
+        out_file (str): Path to the output tab-delimited file.
+
+    Returns:
+        None
     """
     keys = af.get_keys(species)
     genes = af.get_gene_to_transcript_dict(
@@ -69,10 +73,7 @@ def create_as_structure(db, species, out_file):
 
 
 def main():
-    """
-    Main program.
-
-    """
+    """Parse CLI arguments and generate an AS_STRUCTURE output file."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--db_file",
@@ -95,6 +96,7 @@ def main():
 
     db = gffutils.FeatureDB(db_file)
     create_as_structure(db=db, species=species, out_file=out_file)
+
 
 if __name__ == "__main__":
     main()

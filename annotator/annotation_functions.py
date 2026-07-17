@@ -1,9 +1,20 @@
-import pandas as pd
-import numpy as np
+"""Annotation helper functions for GTF-based transcript and gene analysis.
+
+Provides utilities for mapping GTF feature keys across annotation formats,
+building transcript and gene dictionaries from gffutils databases, computing
+gene and mRNA lengths, classifying UTR regions, and deriving intron coordinates.
+"""
+
 import gffutils
 import sys
-import pybedtools
 from collections import defaultdict
+
+from .intervals import Interval
+
+try:
+    import pybedtools
+except ImportError:
+    pybedtools = None
 # from future.utils import iteritems
 
 MAXVAL = 1000000000
@@ -11,16 +22,24 @@ MINVAL = 0
 
 
 def get_keys(gtf_format):
-    """
-    Describes the language for each kind of gtf file 
-    (usually different between sources).
-    Defaults to gencode standard for hg19/mm9/mm10/hg38
+    """Return feature-type key names for a given GTF annotation format.
 
-    :param gtf_format: string
-        either one of: ['gencode'],'ensembl','wormbase','genbank','refseq'
-    :return:
+    Different annotation sources use different feature and attribute names in
+    their GTF files. Defaults to the GENCODE standard used for hg19, mm9, mm10,
+    and hg38 when ``gtf_format`` is unrecognized.
+
+    Args:
+        gtf_format: Annotation source identifier. One of ``'ensembl'``,
+            ``'ce10'``, ``'ce11'``, ``'wormbase'``, ``'dm6_genbank'``,
+            ``'genbank'``, ``'refseq'``, ``'ucsc'``, or any other value
+            (which defaults to GENCODE).
+
+    Returns:
+        A dictionary mapping logical feature names to GTF feature/attribute
+        keys. Keys include ``'cds'``, ``'utr3'``, ``'utr5'``, ``'utr'``,
+        ``'gene'``, ``'gene_name'``, ``'transcript'``, ``'transcript_id'``,
+        ``'transcript_type'``, ``'exon'``, ``'gene_id'``, and ``'gene_type'``.
     """
-    print("gtf_format (species is deprecated) is {}".format(gtf_format))
     if gtf_format == 'ensembl':
         cds_key = 'CDS'
         utr3_key = 'three_prime_utr'
@@ -131,15 +150,17 @@ def get_keys(gtf_format):
 
 
 def get_gene_to_transcript_dict(db, gene_id_key, transcript_id_key):
-    """
-    Returns a gene: transcript dictionary. 
+    """Build a mapping from gene IDs to their transcript IDs.
 
-    gene:[transcript1, transcript2]
+    Args:
+        db: gffutils FeatureDB containing transcript features.
+        gene_id_key: Attribute name for the gene identifier in the GTF.
+        transcript_id_key: Attribute name for the transcript identifier in
+            the GTF.
 
-    :param db: gffutils.FeatureDB
-    :param gene_id_key: string
-    :param transcript_id_key: string
-    :return: 
+    Returns:
+        A ``defaultdict(list)`` mapping each gene ID to a list of associated
+        transcript IDs, e.g. ``{gene_id: [transcript1, transcript2, ...]}``.
     """
 
     genes_dict = defaultdict(list)
@@ -151,8 +172,16 @@ def get_gene_to_transcript_dict(db, gene_id_key, transcript_id_key):
 
 
 def get_longest_transcripts(genes_dict, transcripts_dict):
-    """
-    Returns a dictionary of genes : longest_transcript
+    """Select the longest transcript for each gene by genomic span.
+
+    Args:
+        genes_dict: Mapping from gene ID to a list of transcript IDs.
+        transcripts_dict: Mapping from transcript ID to a dict with ``'start'``
+            and ``'end'`` coordinates.
+
+    Returns:
+        A ``defaultdict(dict)`` mapping each gene ID to the transcript ID with
+        the largest ``end - start`` span.
     """
     longest_genes_dict = defaultdict(dict)
     for gene, transcripts in genes_dict.items():
@@ -169,9 +198,19 @@ def get_longest_transcripts(genes_dict, transcripts_dict):
 
 
 def most_upstream_downstream_positions(genes_dict, transcripts_dict):
-    """
-    Assumes the most downstream start < most downstream end (+, flipped for -) foreach transcript.
-    Returns a dictionary of genes : 
+    """Compute the genomic span covering all transcripts of each gene.
+
+    For each gene, finds the minimum transcript start and maximum transcript
+    end across all associated isoforms.
+
+    Args:
+        genes_dict: Mapping from gene ID to a list of transcript IDs.
+        transcripts_dict: Mapping from transcript ID to a dict with ``'start'``
+            and ``'end'`` coordinates.
+
+    Returns:
+        A ``defaultdict(dict)`` mapping each gene ID to
+        ``{'start': min_start, 'end': max_end}``.
     """
     d = defaultdict(dict)
     for gene, transcripts in genes_dict.items():
@@ -189,12 +228,41 @@ def most_upstream_downstream_positions(genes_dict, transcripts_dict):
 
 
 def get_premrna_lengths(gene_id, upstream_downstream):
+    """Compute the pre-mRNA length for a gene from its genomic span.
+
+    Args:
+        gene_id: Gene identifier to look up in ``upstream_downstream``.
+        upstream_downstream: Mapping from gene ID to a dict with ``'start'``
+            and ``'end'`` coordinates (1-based inclusive).
+
+    Returns:
+        The pre-mRNA length in base pairs: ``end - start + 1``.
+    """
     start = upstream_downstream[gene_id]['start']
     end = upstream_downstream[gene_id]['end']
     return end - start + 1    # (coords are 1-based inclusive still)
 
 
 def get_mrna_lengths(gene_id, exons_dict, genes_dict):
+    """Compute the merged mRNA length for a gene across all isoforms.
+
+    Collects exons from every transcript of the gene, merges overlapping
+    intervals (not strand-specific), and sums the merged exonic length.
+
+    Args:
+        gene_id: Gene identifier to look up in ``genes_dict``.
+        exons_dict: Mapping from transcript ID to a list of exon dicts, each
+            with ``'chrom'``, ``'start'``, ``'end'``, and ``'strand'``.
+        genes_dict: Mapping from gene ID to a list of transcript IDs.
+
+    Returns:
+        Total merged exonic length in base pairs for the gene.
+
+    Raises:
+        ImportError: If ``pybedtools`` is not installed.
+    """
+    if pybedtools is None:
+        raise ImportError("pybedtools is required for get_mrna_lengths")
     exons_list = []
     total_mrna_length = 0
     for transcript in genes_dict[gene_id]:
@@ -215,18 +283,26 @@ def get_mrna_lengths(gene_id, exons_dict, genes_dict):
     return total_mrna_length
 
 
-def get_all_cds_dict(db, cds_key):
-    """
-    For every cds-annotated transcript id (ENST), return a
-    dictionary containing the lowest and highest
-    cds start and end vals for that transcript.
+def get_all_cds_dict(db, cds_key, transcript_id_key='transcript_id'):
+    """Build a per-transcript CDS coordinate dictionary.
 
-    :return chr19_cds_dict : defaultdict{transcript:{'start':START, 'end':END}}
+    For every CDS-annotated transcript, records the lowest start and highest
+    end across all CDS features belonging to that transcript.
+
+    Args:
+        db: gffutils FeatureDB containing CDS features.
+        cds_key: GTF feature type name for CDS entries (format-specific).
+        transcript_id_key: Attribute name for the transcript identifier in
+            the GTF. Defaults to ``'transcript_id'`` (GENCODE).
+
+    Returns:
+        A ``defaultdict(dict)`` mapping each transcript ID to
+        ``{'low': min_start, 'hi': max_end}``.
     """
     # chr19_cds_dict = defaultdict(lambda: {'low': MAXVAL, 'hi': MINVAL})
     cds_dict = defaultdict(dict)
     for cds_feature in db.features_of_type(cds_key):
-        for transcript_id in cds_feature.attributes['transcript_id']:
+        for transcript_id in cds_feature.attributes.get(transcript_id_key, []):
             # if cds_feature.start <= chr19_cds_dict[transcript_id]['low']:
             if cds_feature.start <= cds_dict[transcript_id].get("low", MAXVAL):
                 cds_dict[transcript_id]['low'] = cds_feature.start
@@ -237,19 +313,17 @@ def get_all_cds_dict(db, cds_key):
 
 
 def get_all_exons_dict(db, exon_key, transcript_id_key):
-    """
-    Returns dictionary of exons as transcript_id:{
-        [
-            {'start':START, 'end':END},
-            {'start':START, 'end':END},
-            ...
-        ]
-    }.
+    """Build a per-transcript exon coordinate dictionary.
 
-    :param db: gffutils.FeatureDB
-    :param transcript_id_key: string
-    :param exon_key: string
-    :return: 
+    Args:
+        db: gffutils FeatureDB containing exon features.
+        exon_key: GTF feature type name for exon entries (format-specific).
+        transcript_id_key: Attribute name for the transcript identifier in
+            the GTF.
+
+    Returns:
+        A ``defaultdict(list)`` mapping each transcript ID to a list of exon
+        dicts, each with ``'chrom'``, ``'start'``, ``'end'``, and ``'strand'``.
     """
 
     exons_dict = defaultdict(list)
@@ -267,14 +341,18 @@ def get_all_exons_dict(db, exon_key, transcript_id_key):
 
 
 def get_all_transcripts_dict(db, transcript_key, transcript_id_key):
-    """
-    Returns dictionary of transcript_id:{'start':START, 'end':END}.
+    """Build a per-transcript genomic coordinate dictionary.
 
-    :param db: gffutils.FeatureDB
-    :param transcript_key: string
-    :param transcript_id_key: string
-    :return: chr19_transcripts_dict: defaultdict(dict)
-        hash of transcripts and their start/end coordinates
+    Args:
+        db: gffutils FeatureDB containing transcript features.
+        transcript_key: GTF feature type name for transcript entries
+            (format-specific).
+        transcript_id_key: Attribute name for the transcript identifier in
+            the GTF.
+
+    Returns:
+        A ``defaultdict(dict)`` mapping each transcript ID to
+        ``{'start': start, 'end': end}``.
     """
     transcripts_dict = defaultdict(dict)
     for transcript_feature in db.features_of_type(transcript_key):
@@ -287,30 +365,40 @@ def get_all_transcripts_dict(db, transcript_key, transcript_id_key):
 
 
 def chromosome_set(db):
-    """
-    Returns the set of chromosomes that exist in a database.
+    """Return the set of chromosome (seqid) names in a FeatureDB.
 
-    :return:
+    Args:
+        db: gffutils FeatureDB to query.
+
+    Returns:
+        A ``set`` of unique seqid strings present in the database.
     """
     ret = db.execute("SELECT seqid FROM features").fetchall()
     all_chromosomes = [r['seqid'] for r in ret]
     return set(all_chromosomes)
 
 
-def gene_id_to_name(db, gene_name_key):
-    """
-    Returns a dictionary containing a gene_id:name translation
-    Note: may be different if the 'gene_id' or 'gene_name'
-    chr19_keys are not in the source GTF file
-    (taken from gscripts.region_helpers)
+def gene_id_to_name(db, gene_name_key, gene_id_key='gene_id', strict=False):
+    """Build a gene ID to gene name mapping from a FeatureDB.
 
-    :param db: gffutils.FeatureDB
-        gffutils-created feature database (from 
-        gffutils.create_db())
-    :param gene_name_key: string
-        Typically gene_name
-    :return gene_name_dict : dict
-        dict of {gene_id : gene_name}
+    Adapted from ``gscripts.region_helpers``. Attribute key names may differ
+    if ``gene_id_key`` or the supplied ``gene_name_key`` are absent from the
+    source GTF.
+
+    Args:
+        db: gffutils FeatureDB created via ``gffutils.create_db()``.
+        gene_name_key: Attribute name for the gene display name, typically
+            ``'gene_name'``.
+        gene_id_key: Attribute name for the gene identifier in the GTF.
+        strict: If True, raise ``KeyError`` when required attributes are
+            missing. If False, skip genes with missing keys after printing
+            a warning.
+
+    Returns:
+        A dict mapping each gene ID to its gene name.
+
+    Raises:
+        KeyError: If ``strict`` is True and a gene lacks required attributes.
     """
 
     genes = db.features_of_type('gene')
@@ -318,33 +406,40 @@ def gene_id_to_name(db, gene_name_key):
 
     for gene in genes:
         try:
-            gene_id = gene.attributes['gene_id'][0] if type(
-                gene.attributes['gene_id']
-            ) == list else gene.attributes['gene_id']
+            gene_id = gene.attributes[gene_id_key][0] if type(
+                gene.attributes[gene_id_key]
+            ) == list else gene.attributes[gene_id_key]
             gene_name_dict[gene_id] = gene.attributes[gene_name_key][0]
         except KeyError:
             print(gene.attributes.keys())
             print("Warning. Key not found for {}".format(gene))
-            sys.exit(1)
+            if strict:
+                raise
     return gene_name_dict
 
 
-def classify_utr(utr_feature, cds_dict):
-    """
-    Given a feature classified as a UTR, return whether or not it is
-    upstream (5') or downstream (3') based on CDS positions
+def classify_utr(utr_feature, cds_dict, transcript_id_key='transcript_id'):
+    """Classify a UTR feature as 5' or 3' based on CDS positions.
 
-    :param utr_feature: gffutils.Feature
-        feature already classified as UTR (within a coding transcript but
-        outside of CDS regions).
-    :param cds_dict: dict
-        dictionary containing cds positions for every transcript
-    :return:
+    Determines whether a UTR lies upstream (5') or downstream (3') of the
+    coding sequence, accounting for transcript strand.
+
+    Args:
+        utr_feature: gffutils Feature already classified as UTR (within a
+            coding transcript but outside CDS regions).
+        cds_dict: Mapping from transcript ID to CDS bounds with ``'low'``
+            (minimum start) and ``'hi'`` (maximum end).
+        transcript_id_key: Attribute name for the transcript identifier in
+            the GTF. Defaults to ``'transcript_id'`` (GENCODE).
+
+    Returns:
+        One of ``'5utr'``, ``'3utr'``, or ``'unclassified_utr'``. Returns
+        ``'unclassified_utr'`` when no CDS is found for the transcript.
     """
     three_prime_utr = False
     five_prime_utr = False
 
-    for transcript_id in utr_feature.attributes['transcript_id']:
+    for transcript_id in utr_feature.attributes.get(transcript_id_key, []):
         try:
             if utr_feature.strand == '+':
                 if cds_dict[transcript_id]['low'] > utr_feature.end:
@@ -370,25 +465,19 @@ def classify_utr(utr_feature, cds_dict):
 
 
 def find_introns(transcript, exons):
-    """
-    Given transcript coordinates and a list of exons,
-    return a list of introns (inverse coordinates of exons)
-    This is 1-based inclusive, given 1-based inclusive exon coords
+    """Derive intron coordinates from transcript bounds and exon positions.
 
-    :param transcript: dictionary
-        {'start':int, 'end':int}
-    :param exons: list[dict]
-        [
-            {'start':int,'end':int},
-            {'start':int,'end':int},
-            ...
-        ]
-    :return introns: list[dict]
-        [
-            {'start':int,'end':int},
-            {'start':int,'end':int},
-            ...
-        ]
+    Computes the gaps between exons within a transcript. Coordinates are
+    1-based inclusive, consistent with the exon input format.
+
+    Args:
+        transcript: Dict with ``'start'`` and ``'end'`` defining the transcript
+            span.
+        exons: List of exon dicts, each with ``'start'`` and ``'end'``.
+
+    Returns:
+        A list of intron dicts, each with ``'start'`` and ``'end'``. Returns
+        an empty list if no exons are found.
     """
     positions = []  # list of
     introns = []
@@ -420,63 +509,61 @@ def find_introns(transcript, exons):
 
 
 def get_proxdist_from_intron(interval, distance=500):
+    """Split an intron interval into proximal and distal sub-intervals.
+
+    Divides an intron into flanking proximal regions (``distance`` bp at each
+    end) and a central distal region. Intervals use 0-based half-open
+    coordinates matching BED format.
+
+    Args:
+        interval: Intron ``Interval`` with ``chrom``, ``start``, ``end``,
+            ``score``, and ``strand`` attributes.
+        distance: Size in base pairs of each proximal flank. Defaults to 500.
+
+    Returns:
+        A dict with keys ``'prox'`` and ``'dist'``, each mapping to a list of
+        ``Interval`` objects. If the intron is shorter than ``2 * distance``,
+        the entire interval is returned as a single proximal region and the
+        distal list is empty.
     """
-    Given an interval, return a list of prox and dist intervals.
-    Note: This uses pybedtools, which is 0 based. So unlike 1-based
-    gffutils which is used in most of these functions, it returns
-    zero-based exclusive bedtools intervals!
+    d = distance * 2
+    score = str(interval.score)
+    prox_name = 'proxintron{}'.format(distance)
+    dist_name = 'distintron{}'.format(distance)
 
-    :param interval: pybedtools.Interval
-        intron interval
-    :param distance: int
-        maximum distance away from an exon that an intron position can be
-        before calling it a distal intron region.
-    :return proxdist: dict(list)
-        dictionary containing 'prox' and 'dist' as chr19_keys, list of
-        each proximal and distal intron region as values.
-    """
-
-    d = distance * 2  # total distance
-
-    # if the region is less than 2x the distance, any point on
-    # that region will be equal or less than an exon.
     if interval.end - interval.start <= d:
-        prox = [
+        prox = Interval(
             interval.chrom,
-            '{}'.format(interval.start),
-            '{}'.format(interval.end),
-            'proxintron{}'.format(distance),
-            '{}'.format(interval.score),
-            interval.strand
-        ]
-        prox = pybedtools.create_interval_from_list(prox)
+            interval.start,
+            interval.end,
+            prox_name,
+            score,
+            interval.strand,
+        )
         return {'prox': [prox], 'dist': []}
-    else:
-        prox_left = [
-            interval.chrom,
-            '{}'.format(interval.start),
-            '{}'.format(interval.start + distance),
-            'proxintron{}'.format(distance),
-            '{}'.format(interval.score),
-            interval.strand
-        ]
-        prox_left = pybedtools.create_interval_from_list(prox_left)
-        prox_right = [
-            interval.chrom,
-            '{}'.format(interval.end - distance),
-            '{}'.format(interval.end),
-            'proxintron{}'.format(distance),
-            '{}'.format(interval.score),
-            interval.strand
-        ]
-        prox_right = pybedtools.create_interval_from_list(prox_right)
-        dist = [
-            interval.chrom,
-            '{}'.format(interval.start + distance),
-            '{}'.format(interval.end - distance),
-            'distintron{}'.format(distance),
-            '{}'.format(interval.score),
-            interval.strand
-        ]
-        dist = pybedtools.create_interval_from_list(dist)
-        return {'prox': [prox_left, prox_right], 'dist': [dist]}
+
+    prox_left = Interval(
+        interval.chrom,
+        interval.start,
+        interval.start + distance,
+        prox_name,
+        score,
+        interval.strand,
+    )
+    prox_right = Interval(
+        interval.chrom,
+        interval.end - distance,
+        interval.end,
+        prox_name,
+        score,
+        interval.strand,
+    )
+    dist = Interval(
+        interval.chrom,
+        interval.start + distance,
+        interval.end - distance,
+        dist_name,
+        score,
+        interval.strand,
+    )
+    return {'prox': [prox_left, prox_right], 'dist': [dist]}
