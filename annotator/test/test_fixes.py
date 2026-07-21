@@ -44,6 +44,49 @@ def test_index_is_current_false_after_db_changes(chr21_db, tmp_path):
     )
 
 
+def test_copied_index_remains_current_at_new_location(chr21_db, tmp_path, capsys):
+    import shutil
+
+    build_dir = tmp_path / "build"
+    use_dir = tmp_path / "use"
+    build_dir.mkdir()
+    use_dir.mkdir()
+
+    build_db = build_dir / "chr21.db"
+    shutil.copy2(chr21_db, build_db)
+    build_index = str(build_db) + ".annotator.idx"
+    build_annotator_index(
+        str(build_db),
+        index_file=build_index,
+        chroms=['chr21'],
+        gtf_format='gencode',
+        force=True,
+    )
+
+    use_db = use_dir / "chr21.db"
+    use_index = str(use_db) + ".annotator.idx"
+    shutil.copy2(build_db, use_db)
+    shutil.copy2(build_index, use_index)
+
+    assert Path(build_db).resolve() != use_db.resolve()
+    assert index_is_current(
+        use_index, str(use_db), chroms=['chr21'], gtf_format='gencode'
+    )
+
+    bed = tmp_path / "input.bed"
+    bed.write_text("chr21\t46553734\t46553788\tADARB1\t0\t+\n")
+    out = tmp_path / "out.bed"
+    ab.annotate_bed(
+        str(use_db), [str(bed)], [str(out)],
+        stranded=True, chroms=['chr21'],
+        transcript_priority=[['protein_coding', 'distintron500']],
+        gene_priority=[['protein_coding', 'distintron500']],
+        gtf_format='gencode', append_chr=False, fuzzy=0, cores=1,
+        use_index=True,
+    )
+    assert "stale or incompatible" not in capsys.readouterr().err
+
+
 def test_stale_index_falls_back_to_legacy(chr21_db, tmp_path, capsys):
     import shutil
 

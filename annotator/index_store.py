@@ -91,9 +91,11 @@ def index_is_current(index_file, db_file, chroms=None, gtf_format='gencode',
         append_chr (bool): Whether ``chr`` is prepended to contig names.
 
     Returns:
-        bool: True if the index version, hash bucket size, source path,
+        bool: True if the index version, hash bucket size, source
             modification time, format settings, and chromosome coverage all
-            match the requested run.
+            match the requested run. Absolute ``source_db`` path is not
+            required to match, so indexes copied alongside a database to a
+            new location remain usable when the database mtime is preserved.
     """
     from . import annotate_bed as ab
 
@@ -109,14 +111,9 @@ def index_is_current(index_file, db_file, chroms=None, gtf_format='gencode',
         return False
     if meta.get('hash_val') != str(ab.HASH_VAL):
         return False
-    source_db = meta.get('source_db')
-    if source_db:
-        try:
-            if Path(source_db).resolve() != db_path.resolve():
-                return False
-        except OSError:
-            if source_db != str(db_file):
-                return False
+    # Do not require meta source_db path to match: sidecar indexes are often
+    # copied to a new location with their database. Still require mtime match
+    # so in-place database updates invalidate the index.
     expected_mtime = meta.get('source_db_mtime')
     if expected_mtime is not None:
         try:
