@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 ## [Unreleased]
 
 
+## [0.3.0] - 2026-07-22
+### Added
+- Pre-built `.annotator.idx` sidecar index for faster annotation startup
+- Selective index loading: only chromosomes and 1 Mb buckets touched by the input BED
+- UV / `pyproject.toml` packaging and MkDocs API documentation
+- Native Python 3 support (tested with 3.12)
+
+### Changed
+- Rewrote README for the modernized Python 3 / UV workflow
+- Replaced pybedtools on the annotation hot path
+
+### Fixed
+- Copied annotator indexes remain usable after relocation when database mtime is preserved
+- `append_chr` chromosome/bucket mapping for index triage
+
 ## [0.1.0] - 2022-11-21
 ### Changed
 - deprecated --species in favor of --format
@@ -75,5 +90,5 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 - Lab slides that show usage
 - README now contains examples and default priorities/params
 
-[Unreleased]: https://github.com/byee4/annotator...HEAD
+[Unreleased]: https://github.com/dgorhe/annotator...HEAD
 

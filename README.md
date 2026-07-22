@@ -7,7 +7,7 @@ Requires **Python ≥ 3.10**.
 ## Install
 
 ```bash
-git clone https://github.com/byee4/annotator/
+git clone https://github.com/dgorhe/annotator/
 cd annotator
 uv sync
 ```

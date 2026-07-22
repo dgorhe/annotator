@@ -1,7 +1,7 @@
 site_name: Annotator
 site_description: Annotate BED files with genic information from GTF databases
 site_url: http://127.0.0.1:8000/
-repo_url: https://github.com/byee4/annotator
+repo_url: https://github.com/dgorhe/annotator
 
 theme:
   name: material
