@@ -1,7 +1,7 @@
 """Pre-built annotation index for fast BED lookup."""
 
 import sqlite3
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from . import annotation_functions as af
 
 INDEX_SUFFIX = ".annotator.idx"
 INDEX_VERSION = "1"
+DEFAULT_LAZY_BUCKET_CACHE = 256
 
 
 @dataclass
@@ -267,6 +268,160 @@ def _feature_to_record(feature, chrom, keys):
     )
 
 
+def _row_to_feature_record(row, keys):
+    """Build a FeatureRecord from a features-table SQLite row.
+
+    Args:
+        row (sqlite3.Row): Row with feature columns.
+        keys (dict): Normalized GTF attribute key mapping.
+
+    Returns:
+        FeatureRecord: Compact feature for the annotate hot path.
+    """
+    attrs = {keys['transcript_id']: [row['transcript_id']]}
+    if row['gene_id']:
+        attrs[keys['gene_id']] = row['gene_id'].split(',')
+    if row['gene_name']:
+        attrs[keys['gene_name']] = row['gene_name'].split(',')
+    if row['transcript_type']:
+        attrs[keys['transcript_type']] = row['transcript_type'].split(',')
+    if row['gene_type']:
+        attrs[keys['gene_type']] = row['gene_type'].split(',')
+    return FeatureRecord(
+        chrom=row['chrom'],
+        start=row['start'],
+        end=row['end'],
+        strand=row['strand'],
+        featuretype=row['featuretype'],
+        attributes=attrs,
+    )
+
+
+def _populate_needed_buckets(conn, buckets):
+    """Create a temp table of (chrom, bucket) pairs to load.
+
+    Args:
+        conn (sqlite3.Connection): Open index connection.
+        buckets (iterable): Iterable of ``(chrom, bucket)`` pairs.
+    """
+    conn.execute("DROP TABLE IF EXISTS _needed_buckets")
+    conn.execute(
+        """
+        CREATE TEMP TABLE _needed_buckets (
+            chrom TEXT NOT NULL,
+            bucket INT NOT NULL,
+            PRIMARY KEY (chrom, bucket)
+        ) WITHOUT ROWID
+        """
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO _needed_buckets(chrom, bucket) VALUES (?, ?)",
+        list(buckets),
+    )
+
+
+def query_bucket_features(conn, chrom, bucket, strand, keys, features_by_id=None):
+    """Load features for one ``(chrom, bucket, strand)`` key from an open index.
+
+    Disk-backed prototype for per-bucket overlap lookup without hydrating the
+    full genome into memory. Prefer :func:`load_annotator_index` with a
+    ``buckets`` filter for batch annotation.
+
+    Args:
+        conn (sqlite3.Connection): Open connection to an ``.annotator.idx``.
+        chrom (str): Chromosome / contig name.
+        bucket (int): Spatial hash bucket (``position // hash_val``).
+        strand (str): Strand character (``'+'`` or ``'-'``).
+        keys (dict): Attribute key mapping from ``get_keys``.
+        features_by_id (dict, optional): Cache of feature_id → FeatureRecord
+            reused across calls.
+
+    Returns:
+        list: FeatureRecord objects in the requested bucket.
+    """
+    if features_by_id is None:
+        features_by_id = {}
+    rows = conn.execute(
+        """
+        SELECT f.* FROM features f
+        INNER JOIN bucket_features bf ON bf.feature_id = f.id
+        WHERE bf.chrom = ? AND bf.bucket = ? AND bf.strand = ?
+        """,
+        (chrom, bucket, strand),
+    )
+    features = []
+    for row in rows:
+        feature = features_by_id.get(row['id'])
+        if feature is None:
+            feature = _row_to_feature_record(row, keys)
+            features_by_id[row['id']] = feature
+        features.append(feature)
+    return features
+
+
+class LazyBucketFeaturesDict:
+    """On-demand ``(chrom, bucket, strand)`` feature lists with an LRU cache.
+
+    Suitable for single-process annotation of sparse BEDs. Each miss runs a
+    SQLite bucket query via :func:`query_bucket_features`. Not pickle-friendly;
+    use eager :func:`load_annotator_index` with a ``buckets`` set when
+    multiprocessing.
+    """
+
+    def __init__(
+            self, index_file, keys, max_cached_buckets=DEFAULT_LAZY_BUCKET_CACHE,
+            chroms=None):
+        """Initialize a lazy bucket mapping.
+
+        Args:
+            index_file (str): Path to ``.annotator.idx``.
+            keys (dict): Attribute key mapping from ``get_keys``.
+            max_cached_buckets (int): Maximum distinct bucket keys retained.
+            chroms (list, optional): If set, lookups for other chroms return [].
+        """
+        self._index_file = index_file
+        self._keys = keys
+        self._max_cached_buckets = max(1, int(max_cached_buckets))
+        self._chroms = set(chroms) if chroms else None
+        self._cache = OrderedDict()
+        self._features_by_id = {}
+        self._conn = None
+
+    def _ensure_conn(self):
+        """Open the index connection lazily."""
+        if self._conn is None:
+            self._conn = _connect(self._index_file)
+
+    def close(self):
+        """Close the underlying SQLite connection if open."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __getitem__(self, key):
+        chrom, bucket, strand = key
+        if self._chroms is not None and chrom not in self._chroms:
+            return []
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        self._ensure_conn()
+        features = query_bucket_features(
+            self._conn, chrom, bucket, strand, self._keys, self._features_by_id
+        )
+        self._cache[key] = features
+        while len(self._cache) > self._max_cached_buckets:
+            self._cache.popitem(last=False)
+        return features
+
+    def get(self, key, default=None):
+        """Return features for ``key``, or ``default`` if the list is empty."""
+        features = self[key]
+        if not features and default is not None:
+            return default
+        return features
+
+
 def build_annotator_index(
         db_file, index_file=None, chroms=None, gtf_format='gencode',
         append_chr=False, force=False):
@@ -414,11 +569,14 @@ def build_annotator_index(
     return index_file
 
 
-def load_annotator_index(index_file, chroms=None, gtf_format=None):
+def load_annotator_index(
+        index_file, chroms=None, gtf_format=None, buckets=None,
+        lazy=False, max_cached_buckets=DEFAULT_LAZY_BUCKET_CACHE):
     """Load cds_dict and features_dict from a pre-built annotator index.
 
     Reconstructs in-memory structures compatible with annotate_bed without
-    re-querying the full gffutils database.
+    re-querying the full gffutils database. When ``chroms`` and/or ``buckets``
+    are provided, only the corresponding features are materialized.
 
     Args:
         index_file (str): Path to the .annotator.idx SQLite file.
@@ -426,12 +584,19 @@ def load_annotator_index(index_file, chroms=None, gtf_format=None):
             chromosomes are loaded.
         gtf_format (str, optional): GTF nomenclature for attribute keys.
             Defaults to the value stored in index metadata.
+        buckets (iterable, optional): Optional ``(chrom, bucket)`` pairs to
+            load. When set (including empty), only those spatial buckets are
+            hydrated. Ignored when ``lazy`` is True.
+        lazy (bool): If True, return a :class:`LazyBucketFeaturesDict` that
+            loads buckets on demand with an LRU cache instead of an eager
+            ``features_dict``.
+        max_cached_buckets (int): LRU size when ``lazy`` is True.
 
     Returns:
         tuple: (cds_dict, features_dict, keys) where cds_dict maps
             transcript_id to {'low', 'hi'} CDS bounds, features_dict maps
-            (chrom, bucket, strand) to lists of FeatureRecord objects, and
-            keys is the attribute key mapping from get_keys.
+            (chrom, bucket, strand) to lists of FeatureRecord objects (or a
+            lazy mapping), and keys is the attribute key mapping from get_keys.
 
     Raises:
         ValueError: If the index version or hash bucket size is unsupported.
@@ -461,38 +626,60 @@ def load_annotator_index(index_file, chroms=None, gtf_format=None):
     for row in conn.execute("SELECT transcript_id, low, hi FROM cds"):
         cds_dict[row['transcript_id']] = {'low': row['low'], 'hi': row['hi']}
 
-    features_by_id = {}
-    for row in conn.execute("SELECT * FROM features"):
-        attrs = {keys['transcript_id']: [row['transcript_id']]}
-        if row['gene_id']:
-            attrs[keys['gene_id']] = row['gene_id'].split(',')
-        if row['gene_name']:
-            attrs[keys['gene_name']] = row['gene_name'].split(',')
-        if row['transcript_type']:
-            attrs[keys['transcript_type']] = row['transcript_type'].split(',')
-        if row['gene_type']:
-            attrs[keys['gene_type']] = row['gene_type'].split(',')
-        features_by_id[row['id']] = FeatureRecord(
-            chrom=row['chrom'],
-            start=row['start'],
-            end=row['end'],
-            strand=row['strand'],
-            featuretype=row['featuretype'],
-            attributes=attrs,
+    if lazy:
+        conn.close()
+        features_dict = LazyBucketFeaturesDict(
+            index_file,
+            keys,
+            max_cached_buckets=max_cached_buckets,
+            chroms=chroms,
         )
+        return cds_dict, features_dict, keys
 
     chrom_filter = set(chroms) if chroms else None
-    bucket_sql = (
-        "SELECT chrom, bucket, strand, feature_id FROM bucket_features"
-    )
-    params = []
-    if chrom_filter:
+    bucket_filter = None if buckets is None else set(buckets)
+
+    if bucket_filter is not None:
+        _populate_needed_buckets(conn, bucket_filter)
+        feature_sql = """
+            SELECT DISTINCT f.* FROM features f
+            INNER JOIN bucket_features bf ON bf.feature_id = f.id
+            INNER JOIN _needed_buckets n
+                ON n.chrom = bf.chrom AND n.bucket = bf.bucket
+        """
+        feature_params = []
+        bucket_sql = """
+            SELECT bf.chrom, bf.bucket, bf.strand, bf.feature_id
+            FROM bucket_features bf
+            INNER JOIN _needed_buckets n
+                ON n.chrom = bf.chrom AND n.bucket = bf.bucket
+        """
+        bucket_params = []
+    elif chrom_filter is not None:
         placeholders = ",".join("?" for _ in chrom_filter)
-        bucket_sql += " WHERE chrom IN ({})".format(placeholders)
-        params = list(chrom_filter)
+        feature_sql = (
+            "SELECT * FROM features WHERE chrom IN ({})".format(placeholders)
+        )
+        feature_params = list(chrom_filter)
+        bucket_sql = (
+            "SELECT chrom, bucket, strand, feature_id FROM bucket_features "
+            "WHERE chrom IN ({})".format(placeholders)
+        )
+        bucket_params = list(chrom_filter)
+    else:
+        feature_sql = "SELECT * FROM features"
+        feature_params = []
+        bucket_sql = (
+            "SELECT chrom, bucket, strand, feature_id FROM bucket_features"
+        )
+        bucket_params = []
+
+    features_by_id = {}
+    for row in conn.execute(feature_sql, feature_params):
+        features_by_id[row['id']] = _row_to_feature_record(row, keys)
 
     features_dict = defaultdict(list)
-    for row in conn.execute(bucket_sql, params):
+    for row in conn.execute(bucket_sql, bucket_params):
         feature = features_by_id.get(row['feature_id'])
         if feature is not None:
             features_dict[(row['chrom'], row['bucket'], row['strand'])].append(

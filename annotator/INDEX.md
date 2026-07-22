@@ -82,6 +82,10 @@ what the annotate path needs, pre-bucketed:
    Indexes record whether they cover all chromosomes or a fixed subset; a
    partial index cannot be used for full-genome annotation (runtime falls
    back to rebuilding from the gffutils DB).
+6. **BED-driven triage** — by default, chromosomes are inferred from the input
+   BED and only overlapping 1 Mb buckets are hydrated from the index. Use
+   `--all-chroms` / `--no-triage-buckets` to disable. `--lazy-buckets` keeps an
+   LRU of on-demand SQLite bucket queries (single-core).
 
 Build (once):
 
@@ -98,3 +102,32 @@ load it when present (use `--no-index` to force the legacy rebuild path).
 
 Expected tradeoff: index build adds time to the one-time DB prep step, but
 repeat annotation runs should start in seconds instead of minutes.
+
+## Slim annotate-only artifacts
+
+Keep the full gffutils `.gtf.db` for utilities (`create_region_bedfiles`, etc.).
+Ship or cache a smaller **annotate-only** `.annotator.idx` for BED runs:
+
+### Rebuild index from an existing DB
+
+```bash
+build_gffutils_db --index-only --db_file annotation.gtf.db
+```
+
+### Chromosome-sharded indexes
+
+```bash
+build_gffutils_db --index-only --db_file annotation.gtf.db \
+  --limit-chroms-to chr21 \
+  --index-file annotation.gtf.db.chr21.annotator.idx
+```
+
+Point `--gtfdb` at the same `.gtf.db` and place/copy the shard as the default
+sidecar (`annotation.gtf.db.annotator.idx`), or rebuild a shard matching the
+BED’s contigs. Sharded indexes are smaller on disk and faster to load; they
+cannot satisfy `--all-chroms` full-genome runs (annotator falls back to the
+legacy rebuild).
+
+The index already omits gene rows and raw GTF attribute blobs relative to the
+source DB. Further feature-type pruning is not exposed: dropping types that
+appear in priority lists would change annotation results.

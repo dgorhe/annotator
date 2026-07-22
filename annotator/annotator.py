@@ -159,9 +159,31 @@ def main():
         dest="limit_chroms_to",
         required=False,
         help="limit to annotating to these chromosomes "
-             "only, saves time/memory",
+             "only, saves time/memory. When omitted, chromosomes are "
+             "inferred from the input BED unless --all-chroms is set.",
         nargs='+',
         default=[]
+    )
+    parser.add_argument(
+        "--all-chroms",
+        dest="auto_chroms",
+        action="store_false",
+        help="Load annotation for every chromosome in the database/index "
+             "instead of inferring contigs from the input BED.",
+    )
+    parser.add_argument(
+        "--no-triage-buckets",
+        dest="triage_buckets",
+        action="store_false",
+        help="When using .annotator.idx, load all buckets for selected "
+             "chromosomes instead of only buckets overlapping the BED.",
+    )
+    parser.add_argument(
+        "--lazy-buckets",
+        dest="lazy_buckets",
+        action="store_true",
+        help="Load index buckets on demand with an LRU cache (single-core "
+             "only). Useful for sparse BEDs when peak memory matters.",
     )
     parser.add_argument(
         "-c", "--cores",
@@ -213,7 +235,10 @@ def main():
     annotate_bed.annotate_bed(
         gtfdb_file, input_bed_files, output_annotated_files, stranded, chroms,
         transcript_priority, gene_priority, gtf_format, append_chr,
-        fuzzy, cores, use_index=args.use_index
+        fuzzy, cores, use_index=args.use_index,
+        auto_chroms=args.auto_chroms,
+        triage_buckets=args.triage_buckets,
+        lazy_buckets=args.lazy_buckets,
     )
 
 

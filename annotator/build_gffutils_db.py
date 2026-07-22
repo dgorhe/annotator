@@ -21,17 +21,16 @@ optionally builds a companion .annotator.idx index for faster BED lookup.
 # from future.utils import iteritems
 
 from argparse import ArgumentParser
-import sys
 
 import gffutils
 
-from .index_store import build_annotator_index
+from .index_store import build_annotator_index, index_path_for_db
 
 
 def build_db(
         annotation_file, db_file, force=True, disable_infer_genes=False,
         disable_infer_transcripts=False, build_index=False, index_chroms=None,
-        gtf_format='gencode', append_chr=False
+        gtf_format='gencode', append_chr=False, index_file=None,
 ):
     """Create a gffutils database from a GTF or GFF annotation file.
 
@@ -50,6 +49,8 @@ def build_db(
         gtf_format (str): GTF nomenclature used when building the index.
         append_chr (bool): If True, prepend 'chr' to contig names when
             building the index.
+        index_file (str, optional): Explicit path for the companion index.
+            Defaults to ``index_path_for_db(db_file)``.
 
     Returns:
         gffutils.FeatureDB: The created (or overwritten) database handle.
@@ -63,6 +64,7 @@ def build_db(
     if build_index:
         build_annotator_index(
             db_file,
+            index_file=index_file,
             chroms=index_chroms or [],
             gtf_format=gtf_format,
             append_chr=append_chr,
@@ -71,11 +73,40 @@ def build_db(
     return db
 
 
+def build_index_from_db(
+        db_file, index_file=None, index_chroms=None, gtf_format='gencode',
+        append_chr=False, force=True):
+    """Build a companion ``.annotator.idx`` from an existing gffutils database.
+
+    Args:
+        db_file (str): Path to an existing gffutils SQLite database.
+        index_file (str, optional): Output index path. Defaults to the
+            sidecar path next to ``db_file``.
+        index_chroms (list, optional): Chromosomes to include. Empty or None
+            indexes all chromosomes (full annotate-only index). A single
+            chromosome produces a chrom-sharded slim index.
+        gtf_format (str): GTF nomenclature for attribute keys.
+        append_chr (bool): If True, prepend ``chr`` when hashing contigs.
+        force (bool): If True, overwrite an existing index file.
+
+    Returns:
+        str: Path to the written index file.
+    """
+    return build_annotator_index(
+        db_file,
+        index_file=index_file or index_path_for_db(db_file),
+        chroms=index_chroms or [],
+        gtf_format=gtf_format,
+        append_chr=append_chr,
+        force=force,
+    )
+
+
 def main():
     """Run the gffutils database builder CLI.
 
     Parses command-line arguments and calls build_db with optional annotator
-    index generation.
+    index generation, or builds an index-only artifact from an existing DB.
     """
     # Setup argument parser
     parser = ArgumentParser()
@@ -83,13 +114,13 @@ def main():
     parser.add_argument(
         "--annotation_file",
         dest="annotation_file",
-        help="gff or gtf file",
-        required=True
+        help="gff or gtf file (required unless --index-only)",
+        required=False
     )
     parser.add_argument(
         "--db_file",
         dest="db_file",
-        help="database file output",
+        help="database file output (or existing DB when --index-only)",
         required=True
     )
     parser.add_argument(
@@ -123,6 +154,24 @@ def main():
         default=False
     )
     parser.add_argument(
+        "--index-only",
+        dest="index_only",
+        action='store_true',
+        help="Build or rebuild only the .annotator.idx from an existing "
+             "--db_file (does not create a gffutils DB). Use with "
+             "--limit-chroms-to for chrom-sharded slim indexes.",
+        required=False,
+        default=False
+    )
+    parser.add_argument(
+        "--index-file",
+        dest="index_file",
+        required=False,
+        default=None,
+        help="Explicit output path for the companion index (default: "
+             "<db_file>.annotator.idx). Useful for chrom-sharded artifacts.",
+    )
+    parser.add_argument(
         "--format",
         dest="gtf_format",
         required=False,
@@ -141,25 +190,37 @@ def main():
         "--limit-chroms-to",
         dest="limit_chroms_to",
         required=False,
-        help="Limit annotator index to these chromosomes only.",
+        help="Limit annotator index to these chromosomes only (slim / "
+             "chrom-sharded annotate-only index).",
         nargs='+',
         default=[]
     )
     args = parser.parse_args()
 
-    annotation_file = args.annotation_file
-    db_file = args.db_file
-    force = args.force
-    disable_infer_genes = args.disable_infer_genes
-    disable_infer_transcripts = args.disable_infer_transcripts
+    if args.index_only:
+        if not args.db_file:
+            parser.error("--db_file is required with --index-only")
+        build_index_from_db(
+            args.db_file,
+            index_file=args.index_file,
+            index_chroms=args.limit_chroms_to,
+            gtf_format=args.gtf_format,
+            append_chr=args.append_chr,
+            force=True,
+        )
+        return
+
+    if not args.annotation_file:
+        parser.error("--annotation_file is required unless --index-only is set")
 
     build_db(
-        annotation_file, db_file, force,
-        disable_infer_genes, disable_infer_transcripts,
+        args.annotation_file, args.db_file, args.force,
+        args.disable_infer_genes, args.disable_infer_transcripts,
         build_index=args.build_annotator_index,
         index_chroms=args.limit_chroms_to,
         gtf_format=args.gtf_format,
         append_chr=args.append_chr,
+        index_file=args.index_file,
     )
 
 

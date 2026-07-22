@@ -29,7 +29,7 @@ uv run annotator \
   --gtfdb gencode.v19.annotation.gtf.db
 ```
 
-If a companion `.annotator.idx` sits next to the gtfdb, it is loaded automatically for fast startup. Use `--no-index` to force the legacy in-memory rebuild.
+If a companion `.annotator.idx` sits next to the gtfdb, it is loaded automatically for fast startup. By default, chromosomes and 1 Mb spatial buckets are inferred from the input BED so only relevant slices are loaded. Use `--all-chroms` / `--no-triage-buckets` to load more, `--lazy-buckets` for an on-demand LRU (single-core), or `--no-index` to force the legacy in-memory rebuild.
 
 ## Build a database (and optional index)
 
@@ -42,7 +42,7 @@ uv run build_gffutils_db \
   --build_annotator_index
 ```
 
-That writes `annotation.gtf.db` and `annotation.gtf.db.annotator.idx`. See [`annotator/INDEX.md`](annotator/INDEX.md) for the index format.
+That writes `annotation.gtf.db` and `annotation.gtf.db.annotator.idx`. See [`annotator/INDEX.md`](annotator/INDEX.md) for the index format, slim chrom-sharded indexes (`--index-only`), and [`annotator/ENGINE.md`](annotator/ENGINE.md) for why the annotate path stays on SQLite sidecar indexes rather than MySQL/Postgres.
 
 ### Pre-built databases
 
@@ -108,7 +108,10 @@ For each query interval, annotator first picks the highest-priority overlapping 
 | `--format` | GTF attribute nomenclature: `gencode` (default), `ensembl`, `ce10`/`ce11`/`wormbase`, etc. Replaces the old `--species` flag. |
 | `--unstranded` | Allow unstranded matches; stranded BED features still prefer matching strand first. |
 | `--append-chr` | If the BED uses `chrI`-style names but the DB expects `I`, prepend `chr` when querying. |
-| `--limit-chroms-to` | Restrict the feature hash / index load to listed chromosomes. |
+| `--limit-chroms-to` | Restrict the feature hash / index load to listed chromosomes. When omitted, contigs are inferred from the input BED. |
+| `--all-chroms` | Load every chromosome instead of inferring from the BED. |
+| `--no-triage-buckets` | With an index, load all buckets for selected chroms instead of only BED-overlapping 1 Mb buckets. |
+| `--lazy-buckets` | On-demand LRU bucket loads from the index (single-core only). |
 | `-c` / `--cores` | Parallel annotation workers (default: 1). |
 | `--no-index` | Ignore a neighboring `.annotator.idx` and rebuild from the gtfdb. |
 

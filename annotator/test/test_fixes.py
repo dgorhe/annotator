@@ -203,7 +203,7 @@ def test_partial_index_rejected_for_full_genome(chr21_db, tmp_path, capsys):
         transcript_priority=[['protein_coding', 'distintron500']],
         gene_priority=[['protein_coding', 'distintron500']],
         gtf_format='gencode', append_chr=False, fuzzy=0, cores=1,
-        use_index=True,
+        use_index=True, auto_chroms=False,
     )
     ab.annotate_bed(
         str(local_db), [str(bed)], [str(out_legacy)],
@@ -211,7 +211,7 @@ def test_partial_index_rejected_for_full_genome(chr21_db, tmp_path, capsys):
         transcript_priority=[['protein_coding', 'distintron500']],
         gene_priority=[['protein_coding', 'distintron500']],
         gtf_format='gencode', append_chr=False, fuzzy=0, cores=1,
-        use_index=False,
+        use_index=False, auto_chroms=False,
     )
 
     assert "stale or incompatible" in capsys.readouterr().err

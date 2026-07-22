@@ -27,6 +27,39 @@ MINVAL = 0
 FEATURES_DICT = {}
 
 
+def db_chrom_from_bed(chrom, append_chr):
+    """Map a BED contig name to the gffutils seqid used under ``append_chr``.
+
+    When ``append_chr`` is True the BED uses ``chr``-prefixed names while the
+    database stores unprefixed seqids (e.g. ``chrI`` → ``I``).
+
+    Args:
+        chrom: Contig name from a BED interval.
+        append_chr: Whether annotation is running with ``--append-chr``.
+
+    Returns:
+        Contig name suitable for ``db.region(seqid=...)`` / chrom limits.
+    """
+    if append_chr and chrom.startswith('chr'):
+        return chrom[3:]
+    return chrom
+
+
+def bed_chrom_from_db(chrom, append_chr):
+    """Map a gffutils seqid to the features_dict / index lookup key.
+
+    Args:
+        chrom: Database contig / seqid.
+        append_chr: Whether annotation is running with ``--append-chr``.
+
+    Returns:
+        Contig name matching BED queries and index ``features.chrom`` values.
+    """
+    if append_chr and not chrom.startswith('chr'):
+        return 'chr' + chrom
+    return chrom
+
+
 def _clone_feature_for_region(element, start, end, featuretype):
     """Shallow-copy a feature and set coordinates/type for prox/dist introns.
 
@@ -47,7 +80,9 @@ def _clone_feature_for_region(element, start, end, featuretype):
 
 
 def create_definitions(db_file, chroms=None, gtf_format='gencode',
-                       append_chr=False, fuzzy=0, use_index=True):
+                       append_chr=False, fuzzy=0, use_index=True,
+                       buckets=None, lazy_buckets=False,
+                       max_cached_buckets=256):
     """Create definitions and populate dictionaries used for annotation.
 
     Previously initialized in ``Annotator()``. When a pre-built annotator
@@ -65,6 +100,13 @@ def create_definitions(db_file, chroms=None, gtf_format='gencode',
         fuzzy: Fuzzy-matching parameter passed to feature hashing.
         use_index: If True and a pre-built index exists, load from it
             instead of rebuilding from the database.
+        buckets: Optional iterable of ``(chrom, bucket)`` pairs limiting
+            which spatial hash buckets are loaded from the index. Ignored
+            on the legacy rebuild path.
+        lazy_buckets: If True, load index buckets on demand with an LRU
+            cache instead of hydrating ``buckets`` (or all chrom buckets)
+            eagerly.
+        max_cached_buckets: LRU size when ``lazy_buckets`` is True.
 
     Returns:
         Tuple of ``(exons_dict, transcripts_dict, cds_dict, features_dict,
@@ -82,10 +124,19 @@ def create_definitions(db_file, chroms=None, gtf_format='gencode',
         if index_is_current(
                 index_file, db_file, chroms=chroms, gtf_format=gtf_format,
                 append_chr=append_chr):
+            # Index stores BED-style contig keys (chr-prefixed when append_chr).
+            index_chroms = None
+            if chroms:
+                index_chroms = [
+                    bed_chrom_from_db(c, append_chr) for c in chroms
+                ]
             cds_dict, features_dict, keys = load_annotator_index(
                 index_file,
-                chroms=chroms or None,
+                chroms=index_chroms,
                 gtf_format=gtf_format,
+                buckets=buckets,
+                lazy=lazy_buckets,
+                max_cached_buckets=max_cached_buckets,
             )
             return {}, {}, cds_dict, features_dict, keys
         print(
@@ -800,6 +851,63 @@ def split_bed_interval(bed_string):
     return fields[0], start, end, fields[3], fields[4], fields[5]
 
 
+def regions_from_bed_lines(lines, hash_val=None):
+    """Collect chromosomes and spatial hash buckets touched by BED lines.
+
+    Skips blank lines and comment lines starting with ``#``.
+
+    Args:
+        lines: Iterable of BED6 line strings.
+        hash_val: Bucket size in bases. Defaults to ``HASH_VAL``.
+
+    Returns:
+        Tuple of ``(chroms, buckets)`` where ``chroms`` is a set of contig
+        names and ``buckets`` is a set of ``(chrom, bucket)`` pairs.
+    """
+    if hash_val is None:
+        hash_val = HASH_VAL
+    chroms = set()
+    buckets = set()
+    for line in lines:
+        if not line or line.startswith('#'):
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        chrom, start, end, _name, _score, _strand = split_bed_interval(line)
+        chroms.add(chrom)
+        start_bucket = int(start / hash_val)
+        end_bucket = int(end / hash_val)
+        for bucket in range(start_bucket, end_bucket + 1):
+            buckets.add((chrom, bucket))
+    return chroms, buckets
+
+
+def read_bed_files(bed_files):
+    """Read BED files and aggregate chromosomes / buckets across them.
+
+    Args:
+        bed_files: Sequence of BED6 file paths.
+
+    Returns:
+        Tuple of ``(lines_per_file, chroms, buckets)`` where
+        ``lines_per_file`` is a list of line lists parallel to ``bed_files``,
+        ``chroms`` is the union of contig names, and ``buckets`` is the union
+        of ``(chrom, bucket)`` keys.
+    """
+    lines_per_file = []
+    chroms = set()
+    buckets = set()
+    for bed_file in bed_files:
+        with open(bed_file, 'r') as bed_handle:
+            lines = bed_handle.readlines()
+        lines_per_file.append(lines)
+        file_chroms, file_buckets = regions_from_bed_lines(lines)
+        chroms |= file_chroms
+        buckets |= file_buckets
+    return lines_per_file, chroms, buckets
+
+
 def annotate_bed_single_core(line, stranded, transcript_priority,
                              gene_priority, cds_dict, features_dict,
                              keys, progress=None):
@@ -952,12 +1060,18 @@ def annotate_bed_parallel(lines, stranded, transcript_priority, gene_priority,
 
 def annotate_bed(db_file, bed_files, out_files, stranded, chroms,
                  transcript_priority, gene_priority, gtf_format, append_chr, fuzzy,
-                 cores, use_index=True):
+                 cores, use_index=True, auto_chroms=True, triage_buckets=True,
+                 lazy_buckets=False, max_cached_buckets=256):
     """Annotate BED6 files and write tab-delimited output.
 
     For each input BED file, appends annotation columns (gene_id, gene_name,
     region, and full pipe-delimited annotation string) and writes results to
     the corresponding output file.
+
+    When ``chroms`` is empty and ``auto_chroms`` is True, chromosomes are
+    inferred from the input BED intervals. When a companion index is used and
+    ``triage_buckets`` is True, only 1 Mb spatial buckets overlapping the BED
+    are loaded (or loaded lazily if ``lazy_buckets`` is True).
 
     Args:
         db_file: Path to the gffutils SQLite database file.
@@ -965,6 +1079,8 @@ def annotate_bed(db_file, bed_files, out_files, stranded, chroms,
         out_files: List of output file paths (parallel to ``bed_files``).
         stranded: If True, require same-strand overlaps.
         chroms: List of chromosome names to restrict annotation indexing.
+            Empty means auto-detect from BED when ``auto_chroms`` is True,
+            otherwise load all chromosomes.
         transcript_priority: List of ``(featuretype, transcripttype)`` tuples
             for transcript-level prioritization.
         gene_priority: List of ``(featuretype, transcripttype)`` tuples for
@@ -977,26 +1093,68 @@ def annotate_bed(db_file, bed_files, out_files, stranded, chroms,
         fuzzy: Fuzzy-matching parameter passed to feature indexing.
         cores: Number of worker processes for parallel annotation.
         use_index: If True, load a pre-built annotator index when available.
+        auto_chroms: If True and ``chroms`` is empty, restrict loading to
+            contigs present in the input BED files.
+        triage_buckets: If True and an index is used, load only buckets that
+            intersect input BED intervals.
+        lazy_buckets: If True, use an LRU disk-backed bucket cache instead of
+            eagerly loading triaged buckets. Forced off when ``cores > 1``.
+        max_cached_buckets: LRU size when ``lazy_buckets`` is True.
 
     Returns:
         Integer ``0`` on success.
     """
 
+    lines_per_file, bed_chroms, bed_buckets = read_bed_files(bed_files)
+
+    # Chrom limits for create_definitions / hash_features must be DB seqids.
+    # BED auto-detection and index bucket keys use BED-style names.
+    effective_chroms = list(chroms) if chroms else []
+    if not effective_chroms and auto_chroms and bed_chroms:
+        effective_chroms = sorted(
+            db_chrom_from_bed(c, append_chr) for c in bed_chroms
+        )
+    if effective_chroms and bed_buckets:
+        allowed_bed_chroms = {
+            bed_chrom_from_db(c, append_chr) for c in effective_chroms
+        }
+        allowed_bed_chroms.update(effective_chroms)
+        bed_buckets = {
+            (chrom, bucket) for chrom, bucket in bed_buckets
+            if chrom in allowed_bed_chroms
+        }
+
+    use_lazy = bool(lazy_buckets) and cores <= 1
+    if lazy_buckets and cores > 1:
+        print(
+            "Warning: lazy bucket loading requires a single core; "
+            "loading triaged buckets eagerly.",
+            file=sys.stderr,
+        )
+
+    buckets = None
+    if triage_buckets and use_index and not use_lazy:
+        buckets = bed_buckets
+
     exons_dict, transcripts_dict, \
         cds_dict, features_dict, keys = create_definitions(
-            db_file, chroms=chroms, gtf_format=gtf_format, append_chr=append_chr,
-            fuzzy=fuzzy, use_index=use_index
+            db_file, chroms=effective_chroms, gtf_format=gtf_format,
+            append_chr=append_chr, fuzzy=fuzzy, use_index=use_index,
+            buckets=buckets, lazy_buckets=use_lazy,
+            max_cached_buckets=max_cached_buckets,
         )
-    for n in range(len(bed_files)):
-        bed_file = bed_files[n]
-        out_file = out_files[n]
-        with open(bed_file, 'r') as bed_handle:
-            lines = bed_handle.readlines()
-        results = annotate_bed_parallel(
-            lines, stranded, transcript_priority, gene_priority,
-            cds_dict, features_dict, keys, cores
-        )
-        with open(out_file, 'w') as out_handle:
-            writer = csv.writer(out_handle, delimiter='\t')
-            writer.writerows(results)
+    try:
+        for n in range(len(bed_files)):
+            out_file = out_files[n]
+            results = annotate_bed_parallel(
+                lines_per_file[n], stranded, transcript_priority, gene_priority,
+                cds_dict, features_dict, keys, cores
+            )
+            with open(out_file, 'w') as out_handle:
+                writer = csv.writer(out_handle, delimiter='\t')
+                writer.writerows(results)
+    finally:
+        close = getattr(features_dict, 'close', None)
+        if callable(close):
+            close()
     return 0
